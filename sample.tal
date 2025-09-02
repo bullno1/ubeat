@@ -22,15 +22,21 @@
 	.Mouse/state DEI DUP [ LIT &last-state $1 ] EQU ?{ DUP /state-changed } ,/last-state STR
 	BRK
 &state-changed ( state -- )
-	DUP #01 AND /left
-	DUP #04 AND /right
-	POP
+	DUP ,/last-state LDR EOR ( changed-state ! )
+	DUP #01 AND #00 EQU ?{ OVR /left }
+	DUP #02 AND #00 EQU ?{ OVR /mid }
+	DUP #04 AND #00 EQU ?{ OVR /right }
+	POP2
 	JMP2r
 &left ( down? -- )
-	?{ #0001 .Bytebeat/v DEO2 ( play backward ) JMP2r }
-	#ffff .Bytebeat/v DEO2 ( play forward ) JMP2r
+	#ffff ( backward ) ROT ?{ POP2 #0001 ( forward ) }
+	.Bytebeat/v DEO2
+	JMP2r
+&mid ( down? -- )
+	?{ JMP2r } #0000 .Bytebeat/v DEO2 ( stop )
+	JMP2r
 &right ( down? -- )
-	?{ JMP2r } #0000 .Bytebeat/t ( reset play position ) DEO2
+	?{ JMP2r } #0000 .Bytebeat/t DEO2 ( reset play position )
 	JMP2r
 
 @mix ( -> )
