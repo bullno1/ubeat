@@ -29,12 +29,26 @@ struct buxn_asm_ctx_s {
 	barena_t arena;
 };
 
+enum {
+	BYTEBEAT_SYNC_VECTOR = 1 << 0,
+	BYTEBEAT_SYNC_T      = 1 << 1,
+	BYTEBEAT_SYNC_V      = 1 << 2,
+};
+
 typedef struct {
 	uint16_t vector;
 	uint16_t t;
 	uint16_t v;
 	uint8_t b;
+
+	uint8_t sync_bits;
 } bytebeat_t;
+
+typedef struct {
+	uint64_t timestamp;
+	uint16_t t;
+	uint16_t v;
+} audio_state_t;
 
 typedef struct {
 	bytebeat_t bytebeat;
@@ -187,6 +201,8 @@ frame(void) {
 
 static void
 audio(float* buffer, int num_frames, int num_channels) {
+	bytebeat_t* bytebeat = &audio_thread_devices.bytebeat;
+
 	// Process commands
 	audio_cmd_t* cmd = tribuf_begin_recv(&audio_cmd_buf);
 	if (cmd != NULL) {
@@ -208,7 +224,20 @@ audio(float* buffer, int num_frames, int num_channels) {
 		}
 
 		if (cmd->cmds & AUDIO_CMD_SYNC_BYTEBEAT) {
-			audio_thread_devices.bytebeat = cmd->bytebeat;
+			if (cmd->bytebeat.sync_bits & BYTEBEAT_SYNC_VECTOR) {
+				bytebeat->vector = cmd->bytebeat.vector;
+				BLOG_DEBUG("Updated .Bytebeat/vector");
+			}
+
+			if (cmd->bytebeat.sync_bits & BYTEBEAT_SYNC_T) {
+				bytebeat->t = cmd->bytebeat.t;
+				BLOG_DEBUG("Updated .Bytebeat/t");
+			}
+
+			if (cmd->bytebeat.sync_bits & BYTEBEAT_SYNC_V) {
+				bytebeat->v = cmd->bytebeat.v;
+				BLOG_DEBUG("Updated .Bytebeat/v");
+			}
 		}
 
 		cmd->cmds = 0;
@@ -216,7 +245,6 @@ audio(float* buffer, int num_frames, int num_channels) {
 	}
 
 	// Render audio
-	bytebeat_t* bytebeat = &audio_thread_devices.bytebeat;
 	for (int i = 0; i < num_frames; ++i, bytebeat->t += bytebeat->v) {
 		buxn_vm_execute(audio_thread_vm, bytebeat->vector);
 		buffer[i] = (float)bytebeat->b / 255.f * 2.f - 1.f;
@@ -243,15 +271,16 @@ reload_formula(const char* filename, void* userdata) {
 		basm.rom->content,
 		basm.rom->size
 	);
+	bytebeat_t* bytebeat = &main_thread_devices.bytebeat;
+	bytebeat->sync_bits = 0;
 	buxn_vm_execute(main_thread_vm, BUXN_RESET_VECTOR);
 
-	// Might as well sync everything
-	cmd->cmds |=
-		  AUDIO_CMD_LOAD_ROM
-		| AUDIO_CMD_SYNC_ZERO_PAGE
-		| AUDIO_CMD_SYNC_BYTEBEAT;
+	cmd->cmds |= AUDIO_CMD_LOAD_ROM | AUDIO_CMD_SYNC_ZERO_PAGE;
 	memcpy(cmd->zero_page, main_thread_vm->memory, UINT8_MAX);
-	cmd->bytebeat = main_thread_devices.bytebeat;
+	if (bytebeat->sync_bits != 0) {
+		cmd->cmds |= AUDIO_CMD_SYNC_BYTEBEAT;
+		cmd->bytebeat = main_thread_devices.bytebeat;
+	}
 	tribuf_end_send(&audio_cmd_buf);
 
 	if (main_thread_devices.bytebeat.vector == 0) {
@@ -360,12 +389,15 @@ bytebeat_deo(buxn_vm_t* vm, uint8_t address) {
 	switch (address) {
 		case BYTEBEAT_VECTOR:
 			bytebeat->vector = buxn_vm_dev_load2(vm, BYTEBEAT_VECTOR);
+			bytebeat->sync_bits |= BYTEBEAT_SYNC_VECTOR;
 			break;
 		case BYTEBEAT_T:
 			bytebeat->t = buxn_vm_dev_load2(vm, BYTEBEAT_T);
+			bytebeat->sync_bits |= BYTEBEAT_SYNC_T;
 			break;
 		case BYTEBEAT_V:
 			bytebeat->v = buxn_vm_dev_load2(vm, BYTEBEAT_V);
+			bytebeat->sync_bits |= BYTEBEAT_SYNC_V;
 			break;
 		case BYTEBEAT_B:
 			bytebeat->b = buxn_vm_dev_load(vm, BYTEBEAT_B);
