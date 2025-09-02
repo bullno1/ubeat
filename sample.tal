@@ -1,12 +1,18 @@
+(doc The bytebeat device )
 |d0 @Bytebeat
+	(doc Bytebeat vector, invoked 8000 times per second )
 	&vector $2
+	(doc The current time input or "t" in bytebeat )
 	&t $2
+	(doc The play velocity, it can be set to pause or playing backward )
 	&v $2
+	(doc The bytebeat output.
+	Writing to this outside of a bytebeat vector will have no effect )
 	&b $1
 
 |100 @on-reset ( -> )
 	;mix .Bytebeat/vector DEO2
-	#0001 .Bytebeat/v DEO2
+	#0000 .Bytebeat/v DEO2
 	BRK
 
 @mix ( -> )
