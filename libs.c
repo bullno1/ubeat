@@ -16,6 +16,8 @@
 
 #define BLIB_IMPLEMENTATION
 #include <blog.h>
+#include <bresmon.h>
+#include <barena.h>
 
 #define AM_FFT_IMPLEMENTATION
 #ifdef __clang__

@@ -7,7 +7,7 @@ all: ubeat
 clean:
 	rm -rf .build sbeat *.dbg
 
-ubeat: .build/main.o .build/libs.o
+ubeat: .build/main.o .build/libs.o .build/deps/buxn/src/asm/asm.o .build/deps/buxn/src/vm/vm.o
 	clang \
 		-O3 \
 		-fno-omit-frame-pointer \
@@ -33,8 +33,7 @@ ubeat: .build/main.o .build/libs.o
 		-Ideps/blibs \
 		-Ideps/sokol \
 		-Ideps/sokol/util \
-		-Ideps/fontstash/src \
-		-Ideps/expr \
+		-Ideps/buxn/include \
 		-Ideps/am_fft \
 		-o $@ \
 		$^
