@@ -1,3 +1,4 @@
+|10 @Console/vector $2 &read $5 &type $1 &write $1 &error $1
 |90 @Mouse/vector $2 &x $2 &y $2 &state $4 &scrollx $2 &scrolly
 
 (doc The bytebeat device )
@@ -18,11 +19,19 @@
 	BRK
 
 @on-mouse ( -> )
-	.Mouse/state DEI #01 AND ?{
-		#0001 .Bytebeat/v DEO2 BRK
-	}
-	#ffff .Bytebeat/v DEO2
+	.Mouse/state DEI DUP [ LIT &last-state $1 ] EQU ?{ DUP /state-changed } ,/last-state STR
 	BRK
+&state-changed ( state -- )
+	DUP #01 AND /left
+	DUP #04 AND /right
+	POP
+	JMP2r
+&left ( down? -- )
+	?{ #0001 .Bytebeat/v DEO2 ( play backward ) JMP2r }
+	#ffff .Bytebeat/v DEO2 ( play forward ) JMP2r
+&right ( down? -- )
+	?{ JMP2r } #0000 .Bytebeat/t ( reset play position ) DEO2
+	JMP2r
 
 @mix ( -> )
 	.Bytebeat/t DEI2 forty-two
