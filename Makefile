@@ -6,6 +6,13 @@ OBJS := \
 	.build/src/main.c.o \
 	.build/src/bytebeat.c.o \
 	.build/src/libs.c.o \
+	.build/deps/buxn/src/devices/system.c.o \
+	.build/deps/buxn/src/devices/console.c.o \
+	.build/deps/buxn/src/devices/mouse.c.o \
+	.build/deps/buxn/src/devices/controller.c.o \
+	.build/deps/buxn/src/devices/datetime.c.o \
+	.build/deps/buxn/src/metadata.c.o \
+	.build/deps/buxn/src/vm/vm.c.o \
 	.build/deps/buxn/src/asm/asm.c.o \
 	.build/deps/buxn/src/vm/vm.c.o
 

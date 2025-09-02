@@ -1,3 +1,4 @@
+// vim: set foldmethod=marker foldlevel=0:
 #include <sokol_app.h>
 #include <sokol_gfx.h>
 #include <sokol_glue.h>
@@ -13,6 +14,12 @@
 #include <barena.h>
 #include <buxn/asm/asm.h>
 #include <buxn/vm/vm.h>
+#include <buxn/devices/system.h>
+#include <buxn/devices/console.h>
+#include <buxn/devices/mouse.h>
+#include <buxn/devices/controller.h>
+#include <buxn/devices/datetime.h>
+#include <buxn/metadata.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -42,6 +49,9 @@ typedef struct {
 } audio_state_t;
 
 typedef struct {
+	buxn_console_t console;
+	buxn_mouse_t mouse;
+	buxn_controller_t controller;
 	bytebeat_t bytebeat;
 } devices_t;
 
@@ -99,6 +109,8 @@ slog(
 
 static void
 init_vm(buxn_vm_t* vm, devices_t* devices);
+
+// Program {{{
 
 static void
 init(void) {
@@ -171,6 +183,8 @@ init_vm(buxn_vm_t* vm, devices_t* devices) {
 		.userdata = devices,
 	};
 	buxn_vm_reset(vm, BUXN_VM_RESET_ALL);
+
+	buxn_console_init(vm, &devices->console, 0, NULL);
 	bytebeat_init(&devices->bytebeat);
 }
 
@@ -180,7 +194,153 @@ lerp(float x, float from, float to) {
 }
 
 static void
+event(const sapp_event* event) {
+	bool update_mouse = false;
+	buxn_mouse_t* mouse = &main_thread_devices.mouse;
+	buxn_controller_t* controller = &main_thread_devices.controller;
+
+	switch (event->type) {
+		case SAPP_EVENTTYPE_MOUSE_UP:
+		case SAPP_EVENTTYPE_MOUSE_DOWN: {
+			int button;
+			switch (event->mouse_button) {
+				case SAPP_MOUSEBUTTON_LEFT:
+					button = 0;
+					break;
+				case SAPP_MOUSEBUTTON_RIGHT:
+					button = 2;
+					break;
+				case SAPP_MOUSEBUTTON_MIDDLE:
+					button = 1;
+					break;
+				default:
+					button = -1;
+					break;
+			}
+			if (button >= 0) {
+				buxn_mouse_set_button(
+					mouse,
+					button,
+					event->type == SAPP_EVENTTYPE_MOUSE_DOWN
+				);
+				update_mouse = true;
+			}
+		} break;
+		case SAPP_EVENTTYPE_MOUSE_SCROLL:
+			mouse->scroll_x = (int16_t)event->scroll_x;
+			mouse->scroll_y = -(int16_t)event->scroll_y;
+			update_mouse = true;
+			break;
+		case SAPP_EVENTTYPE_MOUSE_MOVE: {
+			mouse->x = event->mouse_x;
+			mouse->y = event->mouse_y;
+			update_mouse = true;
+		} break;
+		case SAPP_EVENTTYPE_KEY_DOWN:
+		case SAPP_EVENTTYPE_KEY_UP: {
+			bool down = event->type == SAPP_EVENTTYPE_KEY_DOWN;
+			int button = -1;
+			char ch = 0;
+			switch (event->key_code) {
+				case SAPP_KEYCODE_LEFT_CONTROL:
+				case SAPP_KEYCODE_RIGHT_CONTROL:
+					button = BUXN_CONTROLLER_BTN_A;
+					break;
+				case SAPP_KEYCODE_LEFT_ALT:
+				case SAPP_KEYCODE_RIGHT_ALT:
+					button = BUXN_CONTROLLER_BTN_B;
+					break;
+				case SAPP_KEYCODE_LEFT_SHIFT:
+				case SAPP_KEYCODE_RIGHT_SHIFT:
+					button = BUXN_CONTROLLER_BTN_SELECT;
+					break;
+				case SAPP_KEYCODE_HOME:
+					button = BUXN_CONTROLLER_BTN_START;
+					break;
+				case SAPP_KEYCODE_UP:
+					button = BUXN_CONTROLLER_BTN_UP;
+					break;
+				case SAPP_KEYCODE_DOWN:
+					button = BUXN_CONTROLLER_BTN_DOWN;
+					break;
+				case SAPP_KEYCODE_LEFT:
+					button = BUXN_CONTROLLER_BTN_LEFT;
+					break;
+				case SAPP_KEYCODE_RIGHT:
+					button = BUXN_CONTROLLER_BTN_RIGHT;
+					break;
+				case SAPP_KEYCODE_ENTER:
+					ch = '\r';
+					break;
+				case SAPP_KEYCODE_ESCAPE:
+					ch = 27;
+					break;
+				case SAPP_KEYCODE_BACKSPACE:
+					ch = 8;
+					break;
+				case SAPP_KEYCODE_TAB:
+					ch = '\t';
+					break;
+				case SAPP_KEYCODE_DELETE:
+					ch = 127;
+					break;
+				default:
+					break;
+			}
+			if (button >= 0) {
+				buxn_controller_send_button(main_thread_vm, controller, 0, button, down);
+			}
+			if (ch > 0 && down) {
+				buxn_controller_send_char(main_thread_vm, controller, ch);
+			}
+		} break;
+		case SAPP_EVENTTYPE_CHAR: {
+			uint32_t ch = event->char_code;
+			if (ch <= 127) {
+				// Sync the modifiers in case we missed their release due to
+				// focus change
+				buxn_controller_set_button(
+					controller,
+					0,
+					BUXN_CONTROLLER_BTN_A,
+					(event->modifiers & SAPP_MODIFIER_CTRL) != 0
+				);
+				buxn_controller_set_button(
+					controller,
+					0,
+					BUXN_CONTROLLER_BTN_B,
+					(event->modifiers & SAPP_MODIFIER_ALT) != 0
+				);
+				buxn_controller_set_button(
+					controller,
+					0,
+					BUXN_CONTROLLER_BTN_SELECT,
+					(event->modifiers & SAPP_MODIFIER_SHIFT) != 0
+				);
+				// Send the actual character
+				buxn_controller_send_char(main_thread_vm, controller, ch);
+			}
+		} break;
+		default: break;
+	}
+
+	if (update_mouse) {
+		buxn_mouse_update(main_thread_vm);
+		mouse->scroll_x = mouse->scroll_y = 0;
+	}
+}
+
+static void
 frame(void) {
+	bytebeat_t* bytebeat = &main_thread_devices.bytebeat;
+	if (bytebeat->sync_bits != 0) {
+		audio_cmd_t* cmd = tribuf_begin_send(&audio_cmd_buf);
+		cmd->bytebeat = *bytebeat;
+		cmd->cmds |= AUDIO_CMD_SYNC_BYTEBEAT;
+		tribuf_end_send(&audio_cmd_buf);
+		bytebeat->sync_bits = 0;
+	}
+
 	bresmon_check(monitor, false);
 	tribuf_try_swap(&audio_cmd_buf);
 
@@ -190,7 +350,6 @@ frame(void) {
 		tribuf_end_recv(&audio_state_buf);
 	}
 
-	bytebeat_t* bytebeat = &main_thread_devices.bytebeat;
 	bool playing_forward = bytebeat->v < UINT16_MAX / 2;
 
 	sg_begin_pass(&(sg_pass){
@@ -326,6 +485,10 @@ audio(float* buffer, int num_frames, int num_channels) {
 	}
 }
 
+// }}}
+
+// Assembler {{{
+
 static void
 reload_formula(const char* filename, void* userdata) {
 	BLOG_INFO("Compiling %s", filename);
@@ -433,10 +596,24 @@ buxn_asm_fgetc(buxn_asm_ctx_t* ctx, buxn_asm_file_t* file) {
 	}
 }
 
+// }}}
+
+// Devices {{{
+
 uint8_t
 buxn_vm_dei(buxn_vm_t* vm, uint8_t address) {
 	devices_t* devices = vm->config.userdata;
 	switch (buxn_device_id(address)) {
+		case BUXN_DEVICE_SYSTEM:
+			return buxn_system_dei(vm, address);
+		case BUXN_DEVICE_CONSOLE:
+			return buxn_console_dei(vm, &devices->console, address);
+		case BUXN_DEVICE_MOUSE:
+			return buxn_mouse_dei(vm, &devices->mouse, address);
+		case BUXN_DEVICE_CONTROLLER:
+			return buxn_controller_dei(vm, &devices->controller, address);
+		case BUXN_DEVICE_DATETIME:
+			return buxn_datetime_dei(vm, address);
 		case BYTEBEAT_VECTOR:
 			return bytebeat_dei(vm, &devices->bytebeat, address);
 		default:
@@ -448,11 +625,81 @@ void
 buxn_vm_deo(buxn_vm_t* vm, uint8_t address) {
 	devices_t* devices = vm->config.userdata;
 	switch (buxn_device_id(address)) {
+		case BUXN_DEVICE_SYSTEM:
+			buxn_system_deo(vm, address);
+			break;
+		case BUXN_DEVICE_CONSOLE:
+			buxn_console_deo(vm, &devices->console, address);
+			break;
+		case BUXN_DEVICE_MOUSE:
+			buxn_mouse_deo(vm, &devices->mouse, address);
+			break;
+		case BUXN_DEVICE_CONTROLLER:
+			buxn_controller_deo(vm, &devices->controller, address);
+			break;
 		case BYTEBEAT_VECTOR:
 			bytebeat_deo(vm, &devices->bytebeat, address);
 			break;
 	}
 }
+
+void
+buxn_system_debug(struct buxn_vm_s* vm, uint8_t value) {
+	if (value == 0) { return; }
+
+	fprintf(stderr, "WST");
+	for (uint8_t i = 0; i < vm->wsp; ++i) {
+		fprintf(stderr, " %02hhX", vm->ws[i]);
+	}
+	fprintf(stderr, "\n");
+
+	fprintf(stderr, "RST");
+	for (uint8_t i = 0; i < vm->rsp; ++i) {
+		fprintf(stderr, " %02hhX", vm->rs[i]);
+	}
+	fprintf(stderr, "\n");
+}
+
+void
+buxn_system_set_metadata(struct buxn_vm_s* vm, uint16_t address) {
+	buxn_metadata_t metadata = buxn_metadata_parse_from_memory(vm, address);
+	if (metadata.content == NULL) {
+		BLOG_WARN("ROM tried to set invalid metadata");
+		return;
+	}
+
+	char* ch = metadata.content;
+	while (ch < metadata.content + metadata.content_len && *ch != '\n') {
+		++ch;
+	}
+	char old_char = *ch;
+	*ch = '\0';
+	sapp_set_window_title(metadata.content);
+	*ch = old_char;
+}
+
+void
+buxn_system_theme_changed(struct buxn_vm_s* vm) {
+	// TODO: update visualization
+}
+
+void
+buxn_console_handle_write(struct buxn_vm_s* vm, buxn_console_t* device, char c) {
+	(void)vm;
+	(void)device;
+	fputc(c, stdout);
+	fflush(stdout);
+}
+
+void
+buxn_console_handle_error(struct buxn_vm_s* vm, buxn_console_t* device, char c) {
+	(void)vm;
+	(void)device;
+	fputc(c, stderr);
+	fflush(stdout);
+}
+
+// }}}
 
 static void
 slog(
@@ -494,6 +741,7 @@ sokol_main(int argc, char* argv[]) {
 	return (sapp_desc){
 		.init_cb = init,
 		.frame_cb = frame,
+		.event_cb = event,
 		.cleanup_cb = cleanup,
 		.width = 640,
 		.height = 480,

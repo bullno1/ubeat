@@ -1,3 +1,5 @@
+|90 @Mouse/vector $2 &x $2 &y $2 &state $4 &scrollx $2 &scrolly
+
 (doc The bytebeat device )
 |d0 @Bytebeat
 	(doc Bytebeat vector, invoked 8000 times per second )
@@ -12,7 +14,14 @@
 
 |100 @on-reset ( -> )
 	;mix .Bytebeat/vector DEO2
-	#0001 .Bytebeat/v DEO2
+	;on-mouse .Mouse/vector DEO2
+	BRK
+
+@on-mouse ( -> )
+	.Mouse/state DEI #01 AND ?{
+		#0001 .Bytebeat/v DEO2 BRK
+	}
+	#ffff .Bytebeat/v DEO2
 	BRK
 
 @mix ( -> )
