@@ -4,6 +4,10 @@
 #include <sokol_gl.h>
 #include <sokol_audio.h>
 #include <sokol_time.h>
+#ifdef __clang__
+#	pragma clang diagnostic ignored "-Wnewline-eof"
+#endif
+#include <am_fft.h>
 #include <blog.h>
 #include <bresmon.h>
 #include <barena.h>
@@ -11,9 +15,15 @@
 #include <buxn/vm/vm.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include "tribuf.h"
 
 #define SAMPLING_RATE 8000
+
+#ifndef FFT_SIZE
+#	define FFT_SIZE 1024
+#endif
+
 #define BYTEBEAT_VECTOR 0xd0
 #define BYTEBEAT_T 0xd2
 #define BYTEBEAT_V 0xd4
@@ -89,6 +99,10 @@ static devices_t audio_thread_devices = {
 	.bytebeat = { .v = 1 }
 };
 
+static am_fft_plan_1d_t* fft = NULL;
+static am_fft_complex_t* fft_in = NULL;
+static am_fft_complex_t* fft_out = NULL;
+
 static void
 audio(float* buffer, int num_frames, int num_channels);
 
@@ -155,10 +169,18 @@ init(void) {
 			.func = slog,
 		},
 	});
+
+	fft = am_fft_plan_1d(AM_FFT_FORWARD, FFT_SIZE);
+	fft_in = malloc(sizeof(am_fft_complex_t) * FFT_SIZE);
+	fft_out = malloc(sizeof(am_fft_complex_t) * FFT_SIZE);
 }
 
 static void
 cleanup(void) {
+	free(fft_in);
+	free(fft_out);
+	am_fft_plan_1d_free(fft);
+
 	saudio_shutdown();
 
 	free(audio_thread_vm);
@@ -168,6 +190,11 @@ cleanup(void) {
 
 	sgl_shutdown();
 	sg_shutdown();
+}
+
+static float
+lerp(float x, float from, float to) {
+	return from * (1.f - x) + to * x;
 }
 
 static void
@@ -195,6 +222,9 @@ frame(void) {
 		sgl_viewport(0, 0, sapp_width(), sapp_height(), true);
 		sgl_ortho(0.f, sapp_widthf(), sapp_heightf(), 0.f, -1.f, 1.f);
 
+		float width = sapp_widthf();
+		float height = sapp_heightf();
+
 		sgl_begin_points();
 		{
 			sgl_point_size(2.f);
@@ -205,8 +235,6 @@ frame(void) {
 				sgl_c4b(0, 255, 255, 255);
 			}
 
-			float width = sapp_widthf();
-			float height = sapp_heightf();
 			double time_diff_s = stm_sec(stm_now()) - stm_sec(last_audio_state.timestamp);
 			uint16_t t = last_audio_state.t + (uint16_t)(time_diff_s * (double)SAMPLING_RATE) * (double)last_audio_state.v;
 			for (uint16_t i = 0; i < SAMPLING_RATE; ++i) {
@@ -216,7 +244,38 @@ frame(void) {
 					(float)i / (float)SAMPLING_RATE * width,
 					height - height * (float)bytebeat->b / 255.f
 				);
+
+				if (i < (float)FFT_SIZE) {
+					fft_in[(int)i][0] = (float)bytebeat->b / 255.f * 2.f - 1.f;
+					fft_in[(int)i][1] = 0.f;
+				}
 			}
+		}
+		sgl_end();
+
+		am_fft_1d(fft, fft_in, fft_out);
+		sgl_begin_line_strip();
+		for (int i = 0; i < FFT_SIZE / 2; ++i) {
+			float amplitude = sqrtf(fft_out[i][0] * fft_out[i][0] + fft_out[i][1] * fft_out[i][1]) / (float)FFT_SIZE;
+
+			float lerp_factor = sqrtf(amplitude);
+			if (playing_forward) {
+				sgl_c3f(
+					lerp(lerp_factor, 0.f, 1.f),
+					lerp(lerp_factor, 1.f, 0.f),
+					lerp(lerp_factor, 1.f, 0.f)
+				);
+			} else {
+				sgl_c3f(
+					lerp(lerp_factor, 1.f, 1.f),
+					0.f,
+					lerp(lerp_factor, 1.f, 0.f)
+				);
+			}
+			sgl_v2f(
+				(float)i / ((float)FFT_SIZE / 2.f) * width + 1.f,
+				height - height * amplitude
+			);
 		}
 		sgl_end();
 
