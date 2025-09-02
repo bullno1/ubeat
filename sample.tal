@@ -12,11 +12,14 @@
 	(doc The bytebeat output.
 	Writing to this outside of a bytebeat vector will have no effect )
 	&b $1
+	(doc Device options )
+	&options $1
 
 |00 @memory-byte $1
 
 |100 @on-reset ( -> )
 	;on-beat .Bytebeat/vector DEO2
+	#03 .Bytebeat/options DEO ( enable both waveform and fft )
 	;on-mouse .Mouse/vector DEO2
 	.memory-byte LDZ ?{ #+42 .memory-byte STZ }
 	BRK
