@@ -1,0 +1,13 @@
+---
+CompileFlags:
+  Add:
+    - -xc
+    - -Wall
+    - -Werror
+    - -pedantic
+    - -std=c11
+    - -Ideps/sokol
+    - -Ideps/sokol/util
+    - -Ideps/buxn/include
+    - -Ideps/blibs
+    - -Ideps/am_fft
