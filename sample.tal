@@ -1,0 +1,24 @@
+|d0 @Bytebeat
+	&vector $2
+	&t $2
+	&v $2
+	&b $1
+
+|100 @on-reset ( -> )
+	;mix .Bytebeat/vector DEO2
+	#0001 .Bytebeat/v DEO2
+	BRK
+
+@mix ( -> )
+	.Bytebeat/t DEI2 forty-two
+	NIP
+	.Bytebeat/b DEO
+	BRK
+
+@forty-two ( t* -- b* )
+	DUP2 #0a SFT2 #++42 AND2
+	MUL2
+	JMP2r
+
+@t ( t* -- b* )
+	JMP2r
