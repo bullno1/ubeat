@@ -1,5 +1,5 @@
 |10 @Console/vector $2 &read $5 &type $1 &write $1 &error $1
-|90 @Mouse/vector $2 &x $2 &y $2 &state $4 &scrollx $2 &scrolly
+|90 @Mouse/vector $2 &x $2 &y $2 &state $4 &scrollx $2 &scrolly $2
 
 (doc The bytebeat device )
 |d0 @Bytebeat
@@ -13,13 +13,17 @@
 	Writing to this outside of a bytebeat vector will have no effect )
 	&b $1
 
+|00 @memory-byte $1
+
 |100 @on-reset ( -> )
-	;mix .Bytebeat/vector DEO2
+	;on-beat .Bytebeat/vector DEO2
 	;on-mouse .Mouse/vector DEO2
+	.memory-byte LDZ ?{ #+42 .memory-byte STZ }
 	BRK
 
 @on-mouse ( -> )
 	.Mouse/state DEI DUP [ LIT &last-state $1 ] EQU ?{ DUP /state-changed } ,/last-state STR
+	.Mouse/scrolly DEI2 NIP DUP #00 EQU ?{ DUP /scroll } POP
 	BRK
 &state-changed ( state -- )
 	DUP ,/last-state LDR EOR ( changed-state ! )
@@ -38,15 +42,24 @@
 &right ( down? -- )
 	?{ JMP2r } #0000 .Bytebeat/t DEO2 ( reset play position )
 	JMP2r
+&scroll ( scroll -- )
+	.memory-byte LDZ ADD .memory-byte STZ
+	JMP2r
 
-@mix ( -> )
-	.Bytebeat/t DEI2 forty-two
+@on-beat ( -> )
+	.Bytebeat/t DEI2 memory
 	NIP
 	.Bytebeat/b DEO
 	BRK
 
 @forty-two ( t* -- b* )
 	DUP2 #0a SFT2 #++42 AND2
+	MUL2
+	JMP2r
+
+@memory ( t* -- b* )
+	( play the 42 tune but controlled by a byte from memory  )
+	DUP2 #0a SFT2 LIT2 00 -memory-byte LDZ AND2
 	MUL2
 	JMP2r
 

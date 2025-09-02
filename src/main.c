@@ -65,7 +65,7 @@ typedef struct {
 	int cmds;
 
 	rom_t rom;
-	uint8_t zero_page[UINT8_MAX];
+	uint8_t zero_page[256];
 	bytebeat_t bytebeat;
 } audio_cmd_t;
 
@@ -333,12 +333,25 @@ event(const sapp_event* event) {
 static void
 frame(void) {
 	bytebeat_t* bytebeat = &main_thread_devices.bytebeat;
+	audio_cmd_t* cmd = NULL;
+
 	if (bytebeat->sync_bits != 0) {
-		audio_cmd_t* cmd = tribuf_begin_send(&audio_cmd_buf);
+		cmd = cmd == NULL ? tribuf_begin_send(&audio_cmd_buf) : cmd;
 		cmd->bytebeat = *bytebeat;
 		cmd->cmds |= AUDIO_CMD_SYNC_BYTEBEAT;
-		tribuf_end_send(&audio_cmd_buf);
 		bytebeat->sync_bits = 0;
+	}
+
+	static uint8_t last_zero_page[256] = { 0 };
+	if (memcmp(last_zero_page, main_thread_vm->memory, sizeof(last_zero_page))) {
+		cmd = cmd == NULL ? tribuf_begin_send(&audio_cmd_buf) : cmd;
+		memcpy(cmd->zero_page, main_thread_vm->memory, sizeof(cmd->zero_page));
+		cmd->cmds |= AUDIO_CMD_SYNC_ZERO_PAGE;
+		memcpy(last_zero_page, main_thread_vm->memory, sizeof(cmd->zero_page));
+	}
+
+	if (cmd != NULL) {
+		tribuf_end_send(&audio_cmd_buf);
 	}
 
 	bresmon_check(monitor, false);
@@ -440,6 +453,7 @@ audio(float* buffer, int num_frames, int num_channels) {
 				cmd->rom.content,
 				cmd->rom.size
 			);
+			BLOG_INFO("Updated rom");
 		}
 
 		if (cmd->cmds & AUDIO_CMD_SYNC_ZERO_PAGE) {
@@ -448,22 +462,23 @@ audio(float* buffer, int num_frames, int num_channels) {
 				cmd->zero_page,
 				sizeof(cmd->zero_page)
 			);
+			BLOG_INFO("Updated zero page");
 		}
 
 		if (cmd->cmds & AUDIO_CMD_SYNC_BYTEBEAT) {
 			if (cmd->bytebeat.sync_bits & BYTEBEAT_SYNC_VECTOR) {
 				bytebeat->vector = cmd->bytebeat.vector;
-				BLOG_DEBUG("Updated .Bytebeat/vector");
+				BLOG_INFO("Updated .Bytebeat/vector");
 			}
 
 			if (cmd->bytebeat.sync_bits & BYTEBEAT_SYNC_T) {
 				bytebeat->t = cmd->bytebeat.t;
-				BLOG_DEBUG("Updated .Bytebeat/t");
+				BLOG_INFO("Updated .Bytebeat/t");
 			}
 
 			if (cmd->bytebeat.sync_bits & BYTEBEAT_SYNC_V) {
 				bytebeat->v = cmd->bytebeat.v;
-				BLOG_DEBUG("Updated .Bytebeat/v");
+				BLOG_INFO("Updated .Bytebeat/v");
 			}
 		}
 
@@ -514,7 +529,7 @@ reload_formula(const char* filename, void* userdata) {
 	buxn_vm_execute(main_thread_vm, BUXN_RESET_VECTOR);
 
 	cmd->cmds |= AUDIO_CMD_LOAD_ROM | AUDIO_CMD_SYNC_ZERO_PAGE;
-	memcpy(cmd->zero_page, main_thread_vm->memory, UINT8_MAX);
+	memcpy(cmd->zero_page, main_thread_vm->memory, sizeof(cmd->zero_page));
 	if (bytebeat->sync_bits != 0) {
 		cmd->cmds |= AUDIO_CMD_SYNC_BYTEBEAT;
 		cmd->bytebeat = main_thread_devices.bytebeat;
