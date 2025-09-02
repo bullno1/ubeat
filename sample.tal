@@ -12,7 +12,7 @@
 
 |100 @on-reset ( -> )
 	;mix .Bytebeat/vector DEO2
-	#0000 .Bytebeat/v DEO2
+	#0001 .Bytebeat/v DEO2
 	BRK
 
 @mix ( -> )
