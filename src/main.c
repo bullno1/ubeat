@@ -17,17 +17,13 @@
 #include <string.h>
 #include <math.h>
 #include "tribuf.h"
+#include "bytebeat.h"
 
 #define SAMPLING_RATE 8000
 
 #ifndef FFT_SIZE
 #	define FFT_SIZE 1024
 #endif
-
-#define BYTEBEAT_VECTOR 0xd0
-#define BYTEBEAT_T 0xd2
-#define BYTEBEAT_V 0xd4
-#define BYTEBEAT_B 0xd6
 
 typedef struct {
 	uint16_t size;
@@ -38,21 +34,6 @@ struct buxn_asm_ctx_s {
 	rom_t* rom;
 	barena_t arena;
 };
-
-enum {
-	BYTEBEAT_SYNC_VECTOR = 1 << 0,
-	BYTEBEAT_SYNC_T      = 1 << 1,
-	BYTEBEAT_SYNC_V      = 1 << 2,
-};
-
-typedef struct {
-	uint16_t vector;
-	uint16_t t;
-	uint16_t v;
-	uint8_t b;
-
-	uint8_t sync_bits;
-} bytebeat_t;
 
 typedef struct {
 	uint64_t timestamp;
@@ -91,13 +72,9 @@ static audio_state_t audio_states[3] = { 0 };
 static tribuf_t audio_state_buf;
 
 static buxn_vm_t* main_thread_vm = NULL;
-static devices_t main_thread_devices = {
-	.bytebeat = { .v = 1 }
-};
+static devices_t main_thread_devices = { 0 };
 static buxn_vm_t* audio_thread_vm = NULL;
-static devices_t audio_thread_devices = {
-	.bytebeat = { .v = 1 }
-};
+static devices_t audio_thread_devices = { 0 };
 
 static am_fft_plan_1d_t* fft = NULL;
 static am_fft_complex_t* fft_in = NULL;
@@ -121,6 +98,9 @@ slog(
 );
 
 static void
+init_vm(buxn_vm_t* vm, devices_t* devices);
+
+static void
 init(void) {
 	stm_setup();
 
@@ -138,11 +118,7 @@ init(void) {
 	monitor = bresmon_create(NULL);
 
 	main_thread_vm = malloc(sizeof(buxn_vm_t) + BUXN_MEMORY_BANK_SIZE);
-	main_thread_vm->config = (buxn_vm_config_t){
-		.memory_size = BUXN_MEMORY_BANK_SIZE,
-		.userdata = &main_thread_devices,
-	};
-	buxn_vm_reset(main_thread_vm, BUXN_VM_RESET_ALL);
+	init_vm(main_thread_vm, &main_thread_devices);
 
 	tribuf_init(&audio_cmd_buf, &audio_cmds, sizeof(audio_cmds[0]));
 	tribuf_init(&audio_state_buf, &audio_states, sizeof(audio_states[0]));
@@ -150,11 +126,7 @@ init(void) {
 	last_audio_state.v = 1;
 
 	audio_thread_vm = malloc(sizeof(buxn_vm_t) + BUXN_MEMORY_BANK_SIZE);
-	audio_thread_vm->config = (buxn_vm_config_t){
-		.memory_size = BUXN_MEMORY_BANK_SIZE,
-		.userdata = &audio_thread_devices,
-	};
-	buxn_vm_reset(audio_thread_vm, BUXN_VM_RESET_ALL);
+	init_vm(audio_thread_vm, &audio_thread_devices);
 
 	if (input_file != NULL) {
 		watch = bresmon_watch(monitor, input_file, reload_formula, NULL);
@@ -190,6 +162,16 @@ cleanup(void) {
 
 	sgl_shutdown();
 	sg_shutdown();
+}
+
+static void
+init_vm(buxn_vm_t* vm, devices_t* devices) {
+	vm->config = (buxn_vm_config_t){
+		.memory_size = BUXN_MEMORY_BANK_SIZE,
+		.userdata = devices,
+	};
+	buxn_vm_reset(vm, BUXN_VM_RESET_ALL);
+	bytebeat_init(&devices->bytebeat);
 }
 
 static float
@@ -451,58 +433,12 @@ buxn_asm_fgetc(buxn_asm_ctx_t* ctx, buxn_asm_file_t* file) {
 	}
 }
 
-static uint8_t
-bytebeat_dei(buxn_vm_t* vm, uint8_t address) {
-	devices_t* devices = vm->config.userdata;
-	bytebeat_t* bytebeat = &devices->bytebeat;
-	switch (address) {
-		case BYTEBEAT_VECTOR:
-			return (uint8_t)(bytebeat->vector >> 8);
-		case BYTEBEAT_VECTOR + 1:
-			return (uint8_t)(bytebeat->vector & 0xff);
-		case BYTEBEAT_T:
-			return (uint8_t)(bytebeat->t >> 8);
-		case BYTEBEAT_T + 1:
-			return (uint8_t)(bytebeat->t & 0xff);
-		case BYTEBEAT_V:
-			return (uint8_t)(bytebeat->v >> 8);
-		case BYTEBEAT_V + 1:
-			return (uint8_t)(bytebeat->v & 0xff);
-		case BYTEBEAT_B:
-			return bytebeat->b;
-		default:
-			return vm->device[address];
-	}
-}
-
-static void
-bytebeat_deo(buxn_vm_t* vm, uint8_t address) {
-	devices_t* devices = vm->config.userdata;
-	bytebeat_t* bytebeat = &devices->bytebeat;
-	switch (address) {
-		case BYTEBEAT_VECTOR:
-			bytebeat->vector = buxn_vm_dev_load2(vm, BYTEBEAT_VECTOR);
-			bytebeat->sync_bits |= BYTEBEAT_SYNC_VECTOR;
-			break;
-		case BYTEBEAT_T:
-			bytebeat->t = buxn_vm_dev_load2(vm, BYTEBEAT_T);
-			bytebeat->sync_bits |= BYTEBEAT_SYNC_T;
-			break;
-		case BYTEBEAT_V:
-			bytebeat->v = buxn_vm_dev_load2(vm, BYTEBEAT_V);
-			bytebeat->sync_bits |= BYTEBEAT_SYNC_V;
-			break;
-		case BYTEBEAT_B:
-			bytebeat->b = buxn_vm_dev_load(vm, BYTEBEAT_B);
-			break;
-	}
-}
-
 uint8_t
 buxn_vm_dei(buxn_vm_t* vm, uint8_t address) {
+	devices_t* devices = vm->config.userdata;
 	switch (buxn_device_id(address)) {
 		case BYTEBEAT_VECTOR:
-			return bytebeat_dei(vm, address);
+			return bytebeat_dei(vm, &devices->bytebeat, address);
 		default:
 			return vm->device[address];
 	}
@@ -510,9 +446,10 @@ buxn_vm_dei(buxn_vm_t* vm, uint8_t address) {
 
 void
 buxn_vm_deo(buxn_vm_t* vm, uint8_t address) {
+	devices_t* devices = vm->config.userdata;
 	switch (buxn_device_id(address)) {
 		case BYTEBEAT_VECTOR:
-			bytebeat_deo(vm, address);
+			bytebeat_deo(vm, &devices->bytebeat, address);
 			break;
 	}
 }

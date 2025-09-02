@@ -2,14 +2,22 @@
 
 SANITIZE := -fsanitize=address,undefined -fno-sanitize=vptr
 
+OBJS := \
+	.build/src/main.c.o \
+	.build/src/bytebeat.c.o \
+	.build/src/libs.c.o \
+	.build/deps/buxn/src/asm/asm.c.o \
+	.build/deps/buxn/src/vm/vm.c.o
+
 all: ubeat
 
 clean:
 	rm -rf .build sbeat *.dbg
 
-ubeat: .build/src/main.o .build/src/libs.o .build/deps/buxn/src/asm/asm.o .build/deps/buxn/src/vm/vm.o
+ubeat: $(OBJS)
 	clang \
 		-g \
+		-flto \
 		-O3 \
 		-fno-omit-frame-pointer \
 		-fuse-ld=mold \
@@ -19,10 +27,11 @@ ubeat: .build/src/main.o .build/src/libs.o .build/deps/buxn/src/asm/asm.o .build
 		$^ \
 		-o $@
 
-.build/%.o: %.c
+.build/%.c.o: %.c
 	mkdir -p $(shell dirname $@)
 	clang \
 		-c \
+		-flto \
 		-g \
 		-O3 \
 		-fno-omit-frame-pointer \
