@@ -7,8 +7,9 @@ all: ubeat
 clean:
 	rm -rf .build sbeat *.dbg
 
-ubeat: .build/main.o .build/libs.o .build/deps/buxn/src/asm/asm.o .build/deps/buxn/src/vm/vm.o
+ubeat: .build/src/main.o .build/src/libs.o .build/deps/buxn/src/asm/asm.o .build/deps/buxn/src/vm/vm.o
 	clang \
+		-g \
 		-O3 \
 		-fno-omit-frame-pointer \
 		-fuse-ld=mold \
