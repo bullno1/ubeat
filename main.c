@@ -76,6 +76,10 @@ static barena_pool_t arena_pool = { 0 };
 static audio_cmd_t audio_cmds[3] = { 0 };
 static tribuf_t audio_cmd_buf;
 
+static audio_state_t last_audio_state = { 0 };
+static audio_state_t audio_states[3] = { 0 };
+static tribuf_t audio_state_buf;
+
 static buxn_vm_t* main_thread_vm = NULL;
 static devices_t main_thread_devices = {
 	.bytebeat = { .v = 1 }
@@ -105,6 +109,7 @@ slog(
 static void
 init(void) {
 	stm_setup();
+
 	sg_setup(&(sg_desc){
 		.environment = sglue_environment(),
 		.logger.func = slog,
@@ -115,7 +120,6 @@ init(void) {
 		},
 	});
 
-	tribuf_init(&audio_cmd_buf, &audio_cmds, sizeof(audio_cmds[0]));
 	barena_pool_init(&arena_pool, 1);
 	monitor = bresmon_create(NULL);
 
@@ -126,6 +130,11 @@ init(void) {
 	};
 	buxn_vm_reset(main_thread_vm, BUXN_VM_RESET_ALL);
 
+	tribuf_init(&audio_cmd_buf, &audio_cmds, sizeof(audio_cmds[0]));
+	tribuf_init(&audio_state_buf, &audio_states, sizeof(audio_states[0]));
+	last_audio_state.timestamp = stm_now();
+	last_audio_state.v = 1;
+
 	audio_thread_vm = malloc(sizeof(buxn_vm_t) + BUXN_MEMORY_BANK_SIZE);
 	audio_thread_vm->config = (buxn_vm_config_t){
 		.memory_size = BUXN_MEMORY_BANK_SIZE,
@@ -135,7 +144,6 @@ init(void) {
 
 	if (input_file != NULL) {
 		watch = bresmon_watch(monitor, input_file, reload_formula, NULL);
-
 		reload_formula(input_file, NULL);
 	}
 
@@ -167,6 +175,15 @@ frame(void) {
 	bresmon_check(monitor, false);
 	tribuf_try_swap(&audio_cmd_buf);
 
+	audio_state_t* audio_state_ptr = tribuf_begin_recv(&audio_state_buf);
+	if (audio_state_ptr != NULL) {
+		last_audio_state = *audio_state_ptr;
+		tribuf_end_recv(&audio_state_buf);
+	}
+
+	bytebeat_t* bytebeat = &main_thread_devices.bytebeat;
+	bool playing_forward = bytebeat->v < UINT16_MAX / 2;
+
 	sg_begin_pass(&(sg_pass){
 		.swapchain = sglue_swapchain(),
 		.action.colors[0] = {
@@ -178,19 +195,29 @@ frame(void) {
 		sgl_viewport(0, 0, sapp_width(), sapp_height(), true);
 		sgl_ortho(0.f, sapp_widthf(), sapp_heightf(), 0.f, -1.f, 1.f);
 
-		bytebeat_t* bytebeat = &main_thread_devices.bytebeat;
-
 		sgl_begin_points();
-		sgl_point_size(2.f);
-		sgl_c4b(0, 0, 255, 255);
-		float width = sapp_widthf();
-		float height = sapp_heightf();
-		for (float i = 0.f; i < SAMPLING_RATE; i += 1.f) {
-			bytebeat->t += bytebeat->v;
-			buxn_vm_execute(main_thread_vm, bytebeat->vector);
-			sgl_v2f((float)i / (float)SAMPLING_RATE * width, height - height * (float)bytebeat->b / 255.f);
-		}
+		{
+			sgl_point_size(2.f);
 
+			if (playing_forward) {
+				sgl_c4b(0, 0, 255, 255);
+			} else {
+				sgl_c4b(0, 255, 255, 255);
+			}
+
+			float width = sapp_widthf();
+			float height = sapp_heightf();
+			double time_diff_s = stm_sec(stm_now()) - stm_sec(last_audio_state.timestamp);
+			uint16_t t = last_audio_state.t + (uint16_t)(time_diff_s * (double)SAMPLING_RATE) * (double)last_audio_state.v;
+			for (uint16_t i = 0; i < SAMPLING_RATE; ++i) {
+				bytebeat->t = t + i;
+				buxn_vm_execute(main_thread_vm, bytebeat->vector);
+				sgl_v2f(
+					(float)i / (float)SAMPLING_RATE * width,
+					height - height * (float)bytebeat->b / 255.f
+				);
+			}
+		}
 		sgl_end();
 
 		sgl_draw();
@@ -243,6 +270,13 @@ audio(float* buffer, int num_frames, int num_channels) {
 		cmd->cmds = 0;
 		tribuf_end_recv(&audio_cmd_buf);
 	}
+
+	// Send state update
+	audio_state_t* audio_state = tribuf_begin_send(&audio_state_buf);
+	audio_state->t = bytebeat->t;
+	audio_state->v = bytebeat->v;
+	audio_state->timestamp = stm_now();
+	tribuf_end_send(&audio_state_buf);
 
 	// Render audio
 	for (int i = 0; i < num_frames; ++i, bytebeat->t += bytebeat->v) {
