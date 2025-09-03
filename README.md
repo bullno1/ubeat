@@ -15,12 +15,12 @@ While it can be extended, I feel like I should use a fully featured programming 
 
 To build, run: `make`.
 
-Then run: `./ubeat sample.tal`.
+Then run: `./ubeat demo.tal`.
 It will play the classic "42" tune (`t*(42&t>>10)`).
 The file can be edited and the tune will be updated immediately.
 A compile error will not update the music.
 
-The sample is also interactive:
+The demo is also interactive:
 
 * Holding left mouse will play the tune backward
 * Middle mouse will pause
@@ -33,7 +33,7 @@ The sample is also interactive:
 
 This is a work in progress.
 
-The specification can be found in the [sample](sample.tal).
+The specification can be found in the [demo](demo.tal).
 
 To ensure low latency, the vector will be evaluated in a separate thread in its own VM.
 
