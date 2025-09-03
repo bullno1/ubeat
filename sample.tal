@@ -14,7 +14,10 @@
 	(doc The bytebeat output.
 	Writing to this outside of a bytebeat vector will have no effect )
 	&b $1
-	(doc Device options )
+	(doc Device options
+	Bit 0: Whether time domain visualization is enabled.
+	Bit 1: Whether frequency domain (FFT) visualization is enabled.
+	)
 	&options $1
 
 |00 @memory-byte $1
@@ -25,7 +28,7 @@
 	#0f00 .System/b DEO2
 
 	;on-beat .Bytebeat/vector DEO2
-	#02 .Bytebeat/options DEO ( enable both waveform and fft )
+	#02 .Bytebeat/options DEO ( enable only fft )
 	;on-mouse .Mouse/vector DEO2
 	.memory-byte LDZ ?{ #+42 .memory-byte STZ }
 

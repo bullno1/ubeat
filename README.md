@@ -20,6 +20,15 @@ It will play the classic "42" tune (`t*(42&t>>10)`).
 The file can be edited and the tune will be updated immediately.
 A compile error will not update the music.
 
+The sample is also interactive:
+
+* Holding left mouse will play the tune backward
+* Middle mouse will pause
+* Right mouse reset `t` to 0
+* Mouse wheel can adjust the constant factor in the classic 42 tune.
+  The blue line is a reference for the value 42.
+  The red line is the current constant factor.
+
 # Bytebeat device specification
 
 This is a work in progress.
