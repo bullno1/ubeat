@@ -19,6 +19,7 @@
 #include <buxn/devices/mouse.h>
 #include <buxn/devices/controller.h>
 #include <buxn/devices/datetime.h>
+#include <buxn/devices/screen.h>
 #include <buxn/metadata.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,6 +28,7 @@
 #include "bytebeat.h"
 
 #define SAMPLING_RATE 8000
+#define FRAME_TIME_US (1000000.0 / 60.0)
 
 #ifndef FFT_SIZE
 #	define FFT_SIZE 1024
@@ -49,9 +51,17 @@ typedef struct {
 } audio_state_t;
 
 typedef struct {
+	sg_image gpu;
+	sg_view view;
+	uint32_t* cpu;
+	size_t size;
+} layer_texture_t;
+
+typedef struct {
 	buxn_console_t console;
 	buxn_mouse_t mouse;
 	buxn_controller_t controller;
+	buxn_screen_t* screen;
 	bytebeat_t bytebeat;
 } devices_t;
 
@@ -90,6 +100,13 @@ static am_fft_plan_1d_t* fft = NULL;
 static am_fft_complex_t* fft_in = NULL;
 static am_fft_complex_t* fft_out = NULL;
 
+static uint64_t last_frame;
+static double frame_time_accumulator;
+static layer_texture_t background_texture = { 0 };
+static layer_texture_t foreground_texture = { 0 };
+static sg_sampler screen_sampler;
+static sgl_pipeline screen_pipeline;
+
 static void
 audio(float* buffer, int num_frames, int num_channels);
 
@@ -107,10 +124,60 @@ slog(
 	void* user_data
 );
 
-static void
-init_vm(buxn_vm_t* vm, devices_t* devices);
-
 // Program {{{
+
+static void
+init_layer_texture(
+	layer_texture_t* texture,
+	int width,
+	int height,
+	buxn_screen_info_t screen_info,
+	const char* label
+) {
+	texture->cpu = realloc(texture->cpu, screen_info.target_mem_size);
+	texture->size = screen_info.target_mem_size;
+	memset(texture->cpu, 0, screen_info.target_mem_size);
+	if (texture->gpu.id != SG_INVALID_ID) {
+		sg_destroy_image(texture->gpu);
+	}
+	if (texture->view.id != SG_INVALID_ID) {
+		sg_destroy_view(texture->view);
+	}
+
+	texture->gpu = sg_make_image(&(sg_image_desc){
+		.type = SG_IMAGETYPE_2D,
+		.width = width,
+		.height = height,
+		.usage = {
+			.stream_update = true,
+		},
+		.label = label,
+	});
+	texture->view = sg_make_view(&(sg_view_desc){
+		.texture = {
+			.image = texture->gpu,
+		},
+	});
+}
+
+static void
+cleanup_layer_texture(layer_texture_t* texture) {
+	sg_destroy_view(texture->view);
+	sg_destroy_image(texture->gpu);
+	free(texture->cpu);
+}
+
+static void
+init_vm(buxn_vm_t* vm, devices_t* devices) {
+	vm->config = (buxn_vm_config_t){
+		.memory_size = BUXN_MEMORY_BANK_SIZE,
+		.userdata = devices,
+	};
+	buxn_vm_reset(vm, BUXN_VM_RESET_ALL);
+
+	buxn_console_init(vm, &devices->console, 0, NULL);
+	bytebeat_init(&devices->bytebeat);
+}
 
 static void
 init(void) {
@@ -131,6 +198,40 @@ init(void) {
 
 	main_thread_vm = malloc(sizeof(buxn_vm_t) + BUXN_MEMORY_BANK_SIZE);
 	init_vm(main_thread_vm, &main_thread_devices);
+
+	// Screen device for main thread VM
+	int width = sapp_width();
+	int height = sapp_height();
+	buxn_screen_info_t screen_info = buxn_screen_info(width, height);
+	main_thread_devices.screen = malloc(screen_info.screen_mem_size);
+	memset(main_thread_devices.screen, 0, screen_info.screen_mem_size);
+	buxn_screen_resize(main_thread_devices.screen, width, height);
+	init_layer_texture(&background_texture, width, height, screen_info, "ubeat.screen.background");
+	init_layer_texture(&foreground_texture, width, height, screen_info, "ubeat.screen.foreground");
+	screen_sampler = sg_make_sampler(&(sg_sampler_desc){
+		.min_filter = SG_FILTER_NEAREST,
+		.mag_filter = SG_FILTER_NEAREST,
+		.wrap_u = SG_WRAP_CLAMP_TO_EDGE,
+		.wrap_v = SG_WRAP_CLAMP_TO_EDGE,
+		.label = "ubeat.screen",
+	});
+	screen_pipeline = sgl_make_pipeline(&(sg_pipeline_desc){
+		.colors[0] = {
+			.blend = {
+				.enabled = true,
+				.src_factor_rgb = SG_BLENDFACTOR_SRC_ALPHA,
+				.dst_factor_rgb = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
+				.op_rgb = SG_BLENDOP_ADD,
+				.src_factor_alpha = SG_BLENDFACTOR_ONE,
+				.dst_factor_alpha = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
+				.op_alpha = SG_BLENDOP_ADD,
+			},
+		},
+		.label = "ubeat.screen",
+	});
+
+	last_frame = stm_now();
+	frame_time_accumulator = FRAME_TIME_US;  // Render once
 
 	tribuf_init(&audio_cmd_buf, &audio_cmds, sizeof(audio_cmds[0]));
 	tribuf_init(&audio_state_buf, &audio_states, sizeof(audio_states[0]));
@@ -161,6 +262,12 @@ init(void) {
 
 static void
 cleanup(void) {
+	sg_destroy_sampler(screen_sampler);
+	sgl_destroy_pipeline(screen_pipeline);
+	cleanup_layer_texture(&foreground_texture);
+	cleanup_layer_texture(&background_texture);
+	free(main_thread_devices.screen);
+
 	free(fft_in);
 	free(fft_out);
 	am_fft_plan_1d_free(fft);
@@ -174,18 +281,6 @@ cleanup(void) {
 
 	sgl_shutdown();
 	sg_shutdown();
-}
-
-static void
-init_vm(buxn_vm_t* vm, devices_t* devices) {
-	vm->config = (buxn_vm_config_t){
-		.memory_size = BUXN_MEMORY_BANK_SIZE,
-		.userdata = devices,
-	};
-	buxn_vm_reset(vm, BUXN_VM_RESET_ALL);
-
-	buxn_console_init(vm, &devices->console, 0, NULL);
-	bytebeat_init(&devices->bytebeat);
 }
 
 static float
@@ -331,6 +426,20 @@ event(const sapp_event* event) {
 }
 
 static void
+blit_layer_texture(layer_texture_t* texture, float width, float height) {
+	sgl_texture(texture->view, screen_sampler);
+	sgl_c1i(0xffffffff);
+	sgl_begin_quads();
+	{
+		sgl_v2f_t2f(0.f, 0.f, 0.f, 0.f);
+		sgl_v2f_t2f(width, 0.f, 1.f, 0.f);
+		sgl_v2f_t2f(width, height, 1.f, 1.f);
+		sgl_v2f_t2f(0.f, height, 0.f, 1.f);
+	}
+	sgl_end();
+}
+
+static void
 frame(void) {
 	bytebeat_t* bytebeat = &main_thread_devices.bytebeat;
 	audio_cmd_t* cmd = NULL;
@@ -368,80 +477,161 @@ frame(void) {
 	bool playing_forward = bytebeat->v < UINT16_MAX / 2;
 	uint8_t bytebeat_opts = bytebeat_options(main_thread_vm);
 
+	sgl_defaults();
+	sgl_viewport(0, 0, sapp_width(), sapp_height(), true);
+	sgl_ortho(0.f, sapp_widthf(), sapp_heightf(), 0.f, -1.f, 1.f);
+
+	// Screen
+	uint32_t palette[4];
+	buxn_system_palette(main_thread_vm, palette);
+	if (
+		palette[0] != 0xff000000
+		||
+		palette[1] != 0xff000000
+		||
+		palette[2] != 0xff000000
+		||
+		palette[3] != 0xff000000
+	) {
+		if (
+			(int)width != main_thread_devices.screen->width
+			||
+			(int)height != main_thread_devices.screen->height
+		) {
+			buxn_screen_info_t screen_info = buxn_screen_info(width, height);
+			main_thread_devices.screen = realloc(main_thread_devices.screen, screen_info.screen_mem_size);
+			buxn_screen_resize(main_thread_devices.screen, width, height);
+			init_layer_texture(&background_texture, width, height, screen_info, "ubeat.screen.background");
+			init_layer_texture(&foreground_texture, width, height, screen_info, "ubeat.screen.foreground");
+		}
+
+		uint64_t now = stm_now();
+		double time_diff = stm_us(stm_diff(now, last_frame));
+		last_frame = now;
+		frame_time_accumulator += time_diff;
+
+		bool should_redraw = frame_time_accumulator >= FRAME_TIME_US;
+		while (frame_time_accumulator >= FRAME_TIME_US) {
+			frame_time_accumulator -= FRAME_TIME_US;
+			buxn_screen_update(main_thread_vm);
+		}
+
+		if (should_redraw) {
+			if (buxn_screen_render(
+				main_thread_devices.screen,
+				BUXN_SCREEN_LAYER_BACKGROUND,
+				palette,
+				background_texture.cpu
+			)) {
+				sg_update_image(
+					background_texture.gpu,
+					&(sg_image_data) {
+						.subimage[0][0] = {
+							.ptr = background_texture.cpu,
+							.size = background_texture.size,
+						},
+					}
+				);
+			}
+
+			palette[0] = 0; // Foreground treats color0 as transparent
+			if (buxn_screen_render(
+				main_thread_devices.screen,
+				BUXN_SCREEN_LAYER_FOREGROUND,
+				palette,
+				foreground_texture.cpu
+			)) {
+				sg_update_image(
+					foreground_texture.gpu,
+					&(sg_image_data) {
+						.subimage[0][0] = {
+							.ptr = foreground_texture.cpu,
+							.size = foreground_texture.size,
+						},
+					}
+				);
+			}
+		}
+
+		sgl_enable_texture();
+		sgl_push_pipeline();
+		sgl_load_pipeline(screen_pipeline);
+		blit_layer_texture(&background_texture, width, height);
+		blit_layer_texture(&foreground_texture, width, height);
+		sgl_pop_pipeline();
+		sgl_disable_texture();
+	}
+
+	// Bytebeat visual
+	if (bytebeat_opts & (BYTEBEAT_OPTS_SHOW_WAVEFORM | BYTEBEAT_OPTS_SHOW_FFT)) {
+		sgl_begin_points();
+		{
+			sgl_point_size(2.f);
+
+			if (playing_forward) {
+				sgl_c4b(0, 0, 255, 255);
+			} else {
+				sgl_c4b(0, 255, 255, 255);
+			}
+
+			double time_diff_s = stm_sec(stm_now()) - stm_sec(last_audio_state.timestamp);
+			uint16_t t = last_audio_state.t + (uint16_t)(time_diff_s * (double)SAMPLING_RATE) * (double)last_audio_state.v;
+			for (uint16_t i = 0; i < SAMPLING_RATE; ++i) {
+				bytebeat->t = t + i;
+				buxn_vm_execute(main_thread_vm, bytebeat->vector);
+
+				if (bytebeat_opts & BYTEBEAT_OPTS_SHOW_WAVEFORM) {
+					sgl_v2f(
+						(float)i / (float)SAMPLING_RATE * width,
+						height - height * (float)bytebeat->b / 255.f
+					);
+				}
+
+				if (i < (float)FFT_SIZE) {
+					fft_in[(int)i][0] = (float)bytebeat->b / 255.f * 2.f - 1.f;
+					fft_in[(int)i][1] = 0.f;
+				}
+			}
+		}
+		sgl_end();
+
+		if (bytebeat_opts & BYTEBEAT_OPTS_SHOW_FFT) {
+			am_fft_1d(fft, fft_in, fft_out);
+			sgl_begin_line_strip();
+			for (int i = 0; i < FFT_SIZE / 2; ++i) {
+				float amplitude = sqrtf(fft_out[i][0] * fft_out[i][0] + fft_out[i][1] * fft_out[i][1]) / (float)FFT_SIZE;
+
+				float lerp_factor = sqrtf(amplitude);
+				if (playing_forward) {
+					sgl_c3f(
+						lerp(lerp_factor, 0.f, 1.f),
+						lerp(lerp_factor, 1.f, 0.f),
+						lerp(lerp_factor, 1.f, 0.f)
+					);
+				} else {
+					sgl_c3f(
+						lerp(lerp_factor, 1.f, 1.f),
+						0.f,
+						lerp(lerp_factor, 1.f, 0.f)
+					);
+				}
+				sgl_v2f(
+					(float)i / ((float)FFT_SIZE / 2.f) * width + 1.f,
+					height - height * amplitude
+				);
+			}
+			sgl_end();
+		}
+	}
+
+	// Actual rendering
 	sg_begin_pass(&(sg_pass){
 		.swapchain = sglue_swapchain(),
 		.action.colors[0] = {
 			.load_action = SG_LOADACTION_CLEAR,
 		},
 	});
-	{
-		sgl_defaults();
-		sgl_viewport(0, 0, sapp_width(), sapp_height(), true);
-		sgl_ortho(0.f, sapp_widthf(), sapp_heightf(), 0.f, -1.f, 1.f);
-
-		if (bytebeat_opts & (BYTEBEAT_OPTS_SHOW_WAVEFORM | BYTEBEAT_OPTS_SHOW_FFT)) {
-			sgl_begin_points();
-			{
-				sgl_point_size(2.f);
-
-				if (playing_forward) {
-					sgl_c4b(0, 0, 255, 255);
-				} else {
-					sgl_c4b(0, 255, 255, 255);
-				}
-
-				double time_diff_s = stm_sec(stm_now()) - stm_sec(last_audio_state.timestamp);
-				uint16_t t = last_audio_state.t + (uint16_t)(time_diff_s * (double)SAMPLING_RATE) * (double)last_audio_state.v;
-				for (uint16_t i = 0; i < SAMPLING_RATE; ++i) {
-					bytebeat->t = t + i;
-					buxn_vm_execute(main_thread_vm, bytebeat->vector);
-
-					if (bytebeat_opts & BYTEBEAT_OPTS_SHOW_WAVEFORM) {
-						sgl_v2f(
-							(float)i / (float)SAMPLING_RATE * width,
-							height - height * (float)bytebeat->b / 255.f
-						);
-					}
-
-					if (i < (float)FFT_SIZE) {
-						fft_in[(int)i][0] = (float)bytebeat->b / 255.f * 2.f - 1.f;
-						fft_in[(int)i][1] = 0.f;
-					}
-				}
-			}
-			sgl_end();
-
-			if (bytebeat_opts & BYTEBEAT_OPTS_SHOW_FFT) {
-				am_fft_1d(fft, fft_in, fft_out);
-				sgl_begin_line_strip();
-				for (int i = 0; i < FFT_SIZE / 2; ++i) {
-					float amplitude = sqrtf(fft_out[i][0] * fft_out[i][0] + fft_out[i][1] * fft_out[i][1]) / (float)FFT_SIZE;
-
-					float lerp_factor = sqrtf(amplitude);
-					if (playing_forward) {
-						sgl_c3f(
-							lerp(lerp_factor, 0.f, 1.f),
-							lerp(lerp_factor, 1.f, 0.f),
-							lerp(lerp_factor, 1.f, 0.f)
-						);
-					} else {
-						sgl_c3f(
-							lerp(lerp_factor, 1.f, 1.f),
-							0.f,
-							lerp(lerp_factor, 1.f, 0.f)
-						);
-					}
-					sgl_v2f(
-						(float)i / ((float)FFT_SIZE / 2.f) * width + 1.f,
-						height - height * amplitude
-					);
-				}
-				sgl_end();
-			}
-		}
-
-		sgl_draw();
-	}
+	sgl_draw();
 	sg_end_pass();
 	sg_commit();
 }
@@ -460,7 +650,6 @@ audio(float* buffer, int num_frames, int num_channels) {
 				cmd->rom.content,
 				cmd->rom.size
 			);
-			BLOG_INFO("Updated rom");
 		}
 
 		if (cmd->cmds & AUDIO_CMD_SYNC_ZERO_PAGE) {
@@ -469,23 +658,19 @@ audio(float* buffer, int num_frames, int num_channels) {
 				cmd->zero_page,
 				sizeof(cmd->zero_page)
 			);
-			BLOG_INFO("Updated zero page");
 		}
 
 		if (cmd->cmds & AUDIO_CMD_SYNC_BYTEBEAT) {
 			if (cmd->bytebeat.sync_bits & BYTEBEAT_SYNC_VECTOR) {
 				bytebeat->vector = cmd->bytebeat.vector;
-				BLOG_INFO("Updated .Bytebeat/vector");
 			}
 
 			if (cmd->bytebeat.sync_bits & BYTEBEAT_SYNC_T) {
 				bytebeat->t = cmd->bytebeat.t;
-				BLOG_INFO("Updated .Bytebeat/t");
 			}
 
 			if (cmd->bytebeat.sync_bits & BYTEBEAT_SYNC_V) {
 				bytebeat->v = cmd->bytebeat.v;
-				BLOG_INFO("Updated .Bytebeat/v");
 			}
 		}
 
@@ -634,6 +819,12 @@ buxn_vm_dei(buxn_vm_t* vm, uint8_t address) {
 			return buxn_mouse_dei(vm, &devices->mouse, address);
 		case BUXN_DEVICE_CONTROLLER:
 			return buxn_controller_dei(vm, &devices->controller, address);
+		case BUXN_DEVICE_SCREEN:
+			if (devices->screen) {
+				return buxn_screen_dei(vm, devices->screen, address);
+			} else {
+				return 0;
+			}
 		case BUXN_DEVICE_DATETIME:
 			return buxn_datetime_dei(vm, address);
 		case BYTEBEAT_VECTOR:
@@ -658,6 +849,11 @@ buxn_vm_deo(buxn_vm_t* vm, uint8_t address) {
 			break;
 		case BUXN_DEVICE_CONTROLLER:
 			buxn_controller_deo(vm, &devices->controller, address);
+			break;
+		case BUXN_DEVICE_SCREEN:
+			if (devices->screen) {
+				buxn_screen_deo(vm, devices->screen, address);
+			}
 			break;
 		case BYTEBEAT_VECTOR:
 			bytebeat_deo(vm, &devices->bytebeat, address);
@@ -719,6 +915,16 @@ buxn_console_handle_error(struct buxn_vm_s* vm, buxn_console_t* device, char c) 
 	(void)device;
 	fputc(c, stderr);
 	fflush(stdout);
+}
+
+buxn_screen_t*
+buxn_screen_request_resize(
+	struct buxn_vm_s* vm,
+	buxn_screen_t* screen,
+	uint16_t width, uint16_t height
+) {
+	BLOG_WARN("Resizing is not supported");
+	return screen;
 }
 
 // }}}

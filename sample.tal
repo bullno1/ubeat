@@ -1,4 +1,6 @@
+|00 @System/vector $2 &expansion $2 &pad $2 &metadata $2 &r $2 &g $2 &b $2 &debug $1 &state $1
 |10 @Console/vector $2 &read $5 &type $1 &write $1 &error $1
+|20 @Screen &vector $2 &width $2 &height $2 &auto $1 &pad $1 &x $2 &y $2 &addr $2 &pixel $1 &sprite $1
 |90 @Mouse/vector $2 &x $2 &y $2 &state $4 &scrollx $2 &scrolly $2
 
 (doc The bytebeat device )
@@ -18,10 +20,17 @@
 |00 @memory-byte $1
 
 |100 @on-reset ( -> )
+	#000f .System/r DEO2
+	#00f0 .System/g DEO2
+	#0f00 .System/b DEO2
+
 	;on-beat .Bytebeat/vector DEO2
-	#03 .Bytebeat/options DEO ( enable both waveform and fft )
+	#02 .Bytebeat/options DEO ( enable both waveform and fft )
 	;on-mouse .Mouse/vector DEO2
 	.memory-byte LDZ ?{ #+42 .memory-byte STZ }
+
+	;on-frame .Screen/vector DEO2
+
 	BRK
 
 @on-mouse ( -> )
@@ -49,6 +58,24 @@
 	.memory-byte LDZ ADD .memory-byte STZ
 	JMP2r
 
+@on-frame ( -> )
+	( draw reference line )
+	#0000 .Screen/x DEO2
+	#++42 .Screen/y DEO2
+	#81 .Screen/pixel DEO
+	#++43 .Screen/y DEO2
+	#80 .Screen/pixel DEO
+
+	#0000 DUP2 .Screen/x DEO2 .Screen/y DEO2
+	#c0 .Screen/pixel DEO
+
+	[ LIT2 00 -memory-byte ] LDZ .Screen/y DEO2
+	#c3 .Screen/pixel DEO
+	[ LIT2 00 -memory-byte ] LDZ INC .Screen/y DEO2
+	#c0 .Screen/pixel DEO
+
+	BRK
+
 @on-beat ( -> )
 	.Bytebeat/t DEI2 memory
 	NIP
@@ -62,7 +89,7 @@
 
 @memory ( t* -- b* )
 	( play the 42 tune but controlled by a byte from memory  )
-	DUP2 #0a SFT2 LIT2 00 -memory-byte LDZ AND2
+	DUP2 #0a SFT2 [ LIT2 00 -memory-byte LDZ ] AND2
 	MUL2
 	JMP2r
 
