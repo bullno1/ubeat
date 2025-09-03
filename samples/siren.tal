@@ -1,0 +1,8 @@
+~samples/boilerplate.tal
+
+( A weird siren )
+
+@on-beat ( -> )
+	.Bytebeat/t DEI2 DUP2 MUL2 #++256 DIV2
+	NIP .Bytebeat/b DEO
+	BRK

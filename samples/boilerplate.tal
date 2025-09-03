@@ -1,0 +1,7 @@
+|d0 @Bytebeat/vector $2 &t $2 &v $2 &b $1 &options $1
+
+|100 @on-reset ( -> )
+	;on-beat .Bytebeat/vector DEO2
+	#0001 .Bytebeat/v DEO2
+	#03 .Bytebeat/options DEO
+	BRK
