@@ -1,0 +1,34 @@
+~samples/boilerplate.tal
+
+( 42 with adjustable decay )
+( t*(42&t>>10)%256*(1-t%2048/3E3) )
+@on-beat ( -> )
+	[ .Bytebeat/t DEI2 ] forty-two
+	#00ff AND2 ( %256 )
+
+	DUP2
+
+	[ .Bytebeat/t DEI2 ] #07ff AND2
+	#++3000
+	muldiv
+	( t%2048/3E3 )
+
+	SUB2
+
+	NIP .Bytebeat/b DEO
+	BRK
+
+@forty-two ( t* -- b* )
+	DUP2 #0a SFT2 #++42 AND2
+	MUL2
+	JMP2r
+
+(doc Multiply and then divide using the FPU device )
+@muldiv ( val* mul* div* -- result* )
+	.Fpu/rhs DEO2
+	.Fpu/lhs DEO2
+	[ LIT DIVr ] .Fpu/op DEO
+	.Fpu/lhs DEO2
+	[ LIT MUL ] .Fpu/op DEO
+	.Fpu/lhs DEI2
+	JMP2r

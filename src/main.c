@@ -26,6 +26,7 @@
 #include <math.h>
 #include "tribuf.h"
 #include "bytebeat.h"
+#include "fpu.h"
 
 #define SAMPLING_RATE 8000
 #define FRAME_TIME_US (1000000.0 / 60.0)
@@ -63,6 +64,7 @@ typedef struct {
 	buxn_controller_t controller;
 	buxn_screen_t* screen;
 	bytebeat_t bytebeat;
+	buxn_fpu_t fpu;
 } devices_t;
 
 enum {
@@ -576,6 +578,7 @@ frame(void) {
 
 			double time_diff_s = stm_sec(stm_now()) - stm_sec(last_audio_state.timestamp);
 			uint16_t t = last_audio_state.t + (uint16_t)(time_diff_s * (double)SAMPLING_RATE) * (double)last_audio_state.v;
+			uint16_t old_t = bytebeat->t;
 			for (uint16_t i = 0; i < SAMPLING_RATE; ++i) {
 				bytebeat->t = t + i;
 				buxn_vm_execute(main_thread_vm, bytebeat->vector);
@@ -592,6 +595,7 @@ frame(void) {
 					fft_in[(int)i][1] = 0.f;
 				}
 			}
+			bytebeat->t = old_t;
 		}
 		sgl_end();
 
@@ -634,6 +638,11 @@ frame(void) {
 	sgl_draw();
 	sg_end_pass();
 	sg_commit();
+
+	if (audio_state_ptr != NULL) {
+		bytebeat->t = last_audio_state.t;
+		bytebeat->v = last_audio_state.v;
+	}
 }
 
 static void
@@ -829,6 +838,8 @@ buxn_vm_dei(buxn_vm_t* vm, uint8_t address) {
 			return buxn_datetime_dei(vm, address);
 		case BYTEBEAT_VECTOR:
 			return bytebeat_dei(vm, &devices->bytebeat, address);
+		case BUXN_DEVICE_FPU:
+			return buxn_fpu_dei(vm, &devices->fpu, address);
 		default:
 			return vm->device[address];
 	}
@@ -857,6 +868,9 @@ buxn_vm_deo(buxn_vm_t* vm, uint8_t address) {
 			break;
 		case BYTEBEAT_VECTOR:
 			bytebeat_deo(vm, &devices->bytebeat, address);
+			break;
+		case BUXN_DEVICE_FPU:
+			buxn_fpu_deo(vm, &devices->fpu, address);
 			break;
 	}
 }
