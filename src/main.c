@@ -10,6 +10,7 @@
 #endif
 #include <am_fft.h>
 #include <blog.h>
+#include <barg.h>
 #include <buxn/vm/vm.h>
 #include <buxn/devices/system.h>
 #include <buxn/devices/console.h>
@@ -877,31 +878,100 @@ slog(
 	blog_write(level, filename_or_null, line_nr, "%s (%s:%d)", message_or_null, tag, log_item_id);
 }
 
-sapp_desc
-sokol_main(int argc, char* argv[]) {
-	if (argc >= 2) {
-		input_file = argv[1];
+static const char*
+parse_log_level(void* userdata, const char* value) {
+	blog_level_t* log_level = userdata;
+	if        (strcmp(value, "trace") == 0) {
+		*log_level = BLOG_LEVEL_TRACE;
+	} else if (strcmp(value, "debug") == 0) {
+		*log_level = BLOG_LEVEL_DEBUG;
+	} else if (strcmp(value, "info") == 0) {
+		*log_level = BLOG_LEVEL_INFO;
+	} else if (strcmp(value, "warn") == 0) {
+		*log_level = BLOG_LEVEL_WARN;
+	} else if (strcmp(value, "error") == 0) {
+		*log_level = BLOG_LEVEL_ERROR;
+	} else if (strcmp(value, "fatal") == 0) {
+		*log_level = BLOG_LEVEL_FATAL;
+	} else {
+		return "Invalid log level";
 	}
+
+	return NULL;
+}
+
+int
+main(int argc, const char* argv[]) {
+	blog_level_t log_level = BLOG_LEVEL_ERROR;
+	int width = 640;
+	int height = 480;
+	barg_opt_t opts[] = {
+		{
+			.name = "log",
+			.summary = "Log level",
+			.description = "Accepted values are: 'trace', 'debug', 'info', 'warn', 'error', 'fatal'",
+			.value_name = "level",
+			.short_name = 'l',
+			.parser = {
+				.parse = parse_log_level,
+				.userdata = &log_level,
+			},
+		},
+		{
+			.name = "width",
+			.summary = "Initial window width",
+			.short_name = 'w',
+			.parser = barg_int(&width),
+		},
+		{
+			.name = "height",
+			.summary = "Initial window height",
+			.short_name = 'h',
+			.parser = barg_int(&height),
+		},
+		barg_opt_help(),
+	};
+	barg_t barg = {
+		.usage = "ubeat [options] <input.tal>",
+		.summary = "Start the live coding session",
+		.opts = opts,
+		.num_opts = sizeof(opts) / sizeof(opts[0]),
+		.allow_positional = true,
+	};
+	barg_result_t result = barg_parse(&barg, argc, argv);
+	if (result.status != BARG_OK) {
+		barg_print_result(&barg, result, stderr);
+		return result.status == BARG_PARSE_ERROR;
+	}
+	int num_args = argc - result.arg_index;
+	if (num_args != 1) {
+		result.status = BARG_SHOW_HELP;
+		barg_print_result(&barg, result, stderr);
+		return 1;
+	}
+
+	input_file = argv[result.arg_index];
 
 	blog_init(&(blog_options_t){
 		.current_depth_in_project = 0,
 		.current_filename = __FILE__,
 	});
-	static blog_file_logger_options_t log_options = {
+	blog_add_file_logger(log_level, &(blog_file_logger_options_t){
+		.file = stderr,
 		.with_colors = true,
-	};
-	log_options.file = stderr;
-	blog_add_file_logger(BLOG_LEVEL_TRACE, &log_options);
+	});
 
-	return (sapp_desc){
+	sapp_run(&(sapp_desc){
 		.init_cb = init,
 		.frame_cb = frame,
 		.event_cb = event,
 		.cleanup_cb = cleanup,
-		.width = 640,
-		.height = 480,
+		.width = width,
+		.height = height,
 		.window_title = "ubeat",
 		.icon.sokol_default = true,
 		.logger.func = slog,
-	};
+	});
+
+	return 0;
 }

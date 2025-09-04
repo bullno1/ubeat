@@ -5,6 +5,7 @@
 #	error "Unsupported platform"
 #endif
 
+#define SOKOL_NO_ENTRY
 #define SOKOL_IMPL
 #include <sokol_app.h>
 #include <sokol_log.h>
@@ -19,6 +20,7 @@
 #include <bresmon.h>
 #include <barena.h>
 #include <bhash.h>
+#include <barg.h>
 
 #define AM_FFT_IMPLEMENTATION
 #ifdef __clang__
