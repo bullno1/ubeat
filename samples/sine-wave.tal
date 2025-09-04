@@ -2,13 +2,14 @@
 
 @on-beat ( -> )
 	[ .Bytebeat/t DEI2 ] #1d30 ( frequency multiplier ) MUL2
-	#0080 ( amplitude  ) sin
+	#0080 ( amplitude )
+	SWP2 OVR2 sin
+	ADD2
 	NIP .Bytebeat/b DEO
 	BRK
 
 @sin ( angle* amp* -- sin* )
 	SWP2 .Fpu/t DEO2
-	DUP2 .Fpu/r DEO2
+	.Fpu/r DEO2
 	.Fpu/x DEI2
-	ADD2
 	JMP2r
