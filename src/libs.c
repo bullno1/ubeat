@@ -18,6 +18,7 @@
 #include <blog.h>
 #include <bresmon.h>
 #include <barena.h>
+#include <bhash.h>
 
 #define AM_FFT_IMPLEMENTATION
 #ifdef __clang__

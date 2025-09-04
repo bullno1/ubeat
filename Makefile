@@ -4,6 +4,7 @@ SANITIZE := -fsanitize=address,undefined -fno-sanitize=vptr
 
 OBJS := \
 	.build/src/main.c.o \
+	.build/src/asm.c.o \
 	.build/src/bytebeat.c.o \
 	.build/src/fpu.c.o \
 	.build/src/libs.c.o \

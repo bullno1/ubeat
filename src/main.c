@@ -10,9 +10,6 @@
 #endif
 #include <am_fft.h>
 #include <blog.h>
-#include <bresmon.h>
-#include <barena.h>
-#include <buxn/asm/asm.h>
 #include <buxn/vm/vm.h>
 #include <buxn/devices/system.h>
 #include <buxn/devices/console.h>
@@ -27,6 +24,7 @@
 #include "tribuf.h"
 #include "bytebeat.h"
 #include "fpu.h"
+#include "asm.h"
 
 #define SAMPLING_RATE 8000
 #define FRAME_TIME_US (1000000.0 / 60.0)
@@ -34,16 +32,6 @@
 #ifndef FFT_SIZE
 #	define FFT_SIZE 1024
 #endif
-
-typedef struct {
-	uint16_t size;
-	uint8_t content[UINT16_MAX];
-} rom_t;
-
-struct buxn_asm_ctx_s {
-	rom_t* rom;
-	barena_t arena;
-};
 
 typedef struct {
 	uint64_t timestamp;
@@ -82,9 +70,6 @@ typedef struct {
 } audio_cmd_t;
 
 static const char* input_file = NULL;
-static bresmon_t* monitor = NULL;
-static bresmon_watch_t* watch = NULL;
-static barena_pool_t arena_pool = { 0 };
 
 static audio_cmd_t audio_cmds[3] = { 0 };
 static tribuf_t audio_cmd_buf;
@@ -113,7 +98,7 @@ static void
 audio(float* buffer, int num_frames, int num_channels);
 
 static void
-reload_formula(const char* filename, void* userdata);
+try_reload_formula(void);
 
 static void
 slog(
@@ -195,9 +180,6 @@ init(void) {
 		},
 	});
 
-	barena_pool_init(&arena_pool, 1);
-	monitor = bresmon_create(NULL);
-
 	main_thread_vm = malloc(sizeof(buxn_vm_t) + BUXN_MEMORY_BANK_SIZE);
 	init_vm(main_thread_vm, &main_thread_devices);
 
@@ -244,8 +226,8 @@ init(void) {
 	init_vm(audio_thread_vm, &audio_thread_devices);
 
 	if (input_file != NULL) {
-		watch = bresmon_watch(monitor, input_file, reload_formula, NULL);
-		reload_formula(input_file, NULL);
+		ubeat_asm_init(input_file);
+		try_reload_formula();
 	}
 
 	saudio_setup(&(saudio_desc){
@@ -278,11 +260,48 @@ cleanup(void) {
 
 	free(audio_thread_vm);
 	free(main_thread_vm);
-	bresmon_destroy(monitor);
-	barena_pool_cleanup(&arena_pool);
+	if (input_file != NULL) {
+		ubeat_asm_cleanup();
+	}
 
 	sgl_shutdown();
 	sg_shutdown();
+}
+
+static void
+try_reload_formula(void) {
+	if (!(input_file != NULL && ubeat_asm_should_reload())) { return; }
+
+	BLOG_INFO("Compiling %s", input_file);
+
+	rom_t tmp_rom = { 0 };
+	if (!ubeat_asm_reload(&tmp_rom)) { return; }
+
+	BLOG_INFO("Executing %s (%d bytes)", input_file, tmp_rom.size);
+	buxn_vm_reset(main_thread_vm, BUXN_VM_RESET_SOFT);
+	memcpy(
+		main_thread_vm->memory + BUXN_RESET_VECTOR,
+		tmp_rom.content,
+		tmp_rom.size
+	);
+	bytebeat_t* bytebeat = &main_thread_devices.bytebeat;
+	bytebeat->sync_bits = 0;
+	buxn_vm_execute(main_thread_vm, BUXN_RESET_VECTOR);
+
+	audio_cmd_t* cmd = tribuf_begin_send(&audio_cmd_buf);
+	memcpy(cmd->rom.content, tmp_rom.content, tmp_rom.size);
+	cmd->rom.size = tmp_rom.size;
+	cmd->cmds |= AUDIO_CMD_LOAD_ROM | AUDIO_CMD_SYNC_ZERO_PAGE;
+	memcpy(cmd->zero_page, main_thread_vm->memory, sizeof(cmd->zero_page));
+	if (bytebeat->sync_bits != 0) {
+		cmd->cmds |= AUDIO_CMD_SYNC_BYTEBEAT;
+		cmd->bytebeat = main_thread_devices.bytebeat;
+	}
+	tribuf_end_send(&audio_cmd_buf);
+
+	if (main_thread_devices.bytebeat.vector == 0) {
+		BLOG_WARN("Bytebeat vector is not set");
+	}
 }
 
 static float
@@ -465,7 +484,7 @@ frame(void) {
 		tribuf_end_send(&audio_cmd_buf);
 	}
 
-	bresmon_check(monitor, false);
+	try_reload_formula();
 	tribuf_try_swap(&audio_cmd_buf);
 
 	audio_state_t* audio_state_ptr = tribuf_begin_recv(&audio_state_buf);
@@ -659,6 +678,7 @@ audio(float* buffer, int num_frames, int num_channels) {
 				cmd->rom.content,
 				cmd->rom.size
 			);
+			BLOG_DEBUG("Loaded new rom: %d bytes", cmd->rom.size);
 		}
 
 		if (cmd->cmds & AUDIO_CMD_SYNC_ZERO_PAGE) {
@@ -667,19 +687,23 @@ audio(float* buffer, int num_frames, int num_channels) {
 				cmd->zero_page,
 				sizeof(cmd->zero_page)
 			);
+			BLOG_DEBUG("Synced zero page");
 		}
 
 		if (cmd->cmds & AUDIO_CMD_SYNC_BYTEBEAT) {
 			if (cmd->bytebeat.sync_bits & BYTEBEAT_SYNC_VECTOR) {
 				bytebeat->vector = cmd->bytebeat.vector;
+				BLOG_DEBUG("Updated .Bytebeat/vector");
 			}
 
 			if (cmd->bytebeat.sync_bits & BYTEBEAT_SYNC_T) {
 				bytebeat->t = cmd->bytebeat.t;
+				BLOG_DEBUG("Updated .Bytebeat/t");
 			}
 
 			if (cmd->bytebeat.sync_bits & BYTEBEAT_SYNC_V) {
 				bytebeat->v = cmd->bytebeat.v;
+				BLOG_DEBUG("Updated .Bytebeat/v");
 			}
 		}
 
@@ -698,117 +722,6 @@ audio(float* buffer, int num_frames, int num_channels) {
 	for (int i = 0; i < num_frames; ++i, bytebeat->t += bytebeat->v) {
 		buxn_vm_execute(audio_thread_vm, bytebeat->vector);
 		buffer[i] = (float)bytebeat->b / 255.f * 2.f - 1.f;
-	}
-}
-
-// }}}
-
-// Assembler {{{
-
-static void
-reload_formula(const char* filename, void* userdata) {
-	BLOG_INFO("Compiling %s", filename);
-
-	audio_cmd_t* cmd = tribuf_begin_send(&audio_cmd_buf);
-	buxn_asm_ctx_t basm = {
-		.rom = &cmd->rom,
-	};
-	barena_init(&basm.arena, &arena_pool);
-	bool success = buxn_asm(&basm, filename);
-	barena_reset(&basm.arena);
-	if (!success) { return; }
-
-	BLOG_INFO("Executing %s (%d bytes)", filename, cmd->rom.size);
-	buxn_vm_reset(main_thread_vm, BUXN_VM_RESET_SOFT);
-	memcpy(
-		main_thread_vm->memory + BUXN_RESET_VECTOR,
-		basm.rom->content,
-		basm.rom->size
-	);
-	bytebeat_t* bytebeat = &main_thread_devices.bytebeat;
-	bytebeat->sync_bits = 0;
-	buxn_vm_execute(main_thread_vm, BUXN_RESET_VECTOR);
-
-	cmd->cmds |= AUDIO_CMD_LOAD_ROM | AUDIO_CMD_SYNC_ZERO_PAGE;
-	memcpy(cmd->zero_page, main_thread_vm->memory, sizeof(cmd->zero_page));
-	if (bytebeat->sync_bits != 0) {
-		cmd->cmds |= AUDIO_CMD_SYNC_BYTEBEAT;
-		cmd->bytebeat = main_thread_devices.bytebeat;
-	}
-	tribuf_end_send(&audio_cmd_buf);
-
-	if (main_thread_devices.bytebeat.vector == 0) {
-		BLOG_WARN("Bytebeat vector is not set");
-	}
-}
-
-void*
-buxn_asm_alloc(buxn_asm_ctx_t* ctx, size_t size, size_t alignment) {
-	return barena_memalign(&ctx->arena, size, alignment);
-}
-
-void
-buxn_asm_report(buxn_asm_ctx_t* ctx, buxn_asm_report_type_t type, const buxn_asm_report_t* report) {
-	blog_level_t level = BLOG_LEVEL_INFO;
-	switch (type) {
-		case BUXN_ASM_REPORT_ERROR: level = BLOG_LEVEL_ERROR; break;
-		case BUXN_ASM_REPORT_WARNING: level = BLOG_LEVEL_WARN; break;
-	}
-
-	if (report->token == NULL) {
-		blog_write(
-			level,
-			report->region->filename, report->region->range.start.line,
-			"%s", report->message
-		);
-	} else {
-		blog_write(
-			level,
-			report->region->filename, report->region->range.start.line,
-			"%s (`%s`)", report->message, report->token
-		);
-	}
-
-	if (report->related_message != NULL) {
-		blog_write(
-			BLOG_LEVEL_INFO,
-			report->related_region->filename, report->related_region->range.start.line,
-			"%s:", report->related_message
-		);
-	}
-}
-
-void
-buxn_asm_put_rom(buxn_asm_ctx_t* ctx, uint16_t addr, uint8_t value) {
-	uint16_t offset = addr - 256;
-	ctx->rom->content[offset] = value;
-	ctx->rom->size = offset + 1 > ctx->rom->size ? offset + 1 : ctx->rom->size;
-}
-
-void
-buxn_asm_put_symbol(buxn_asm_ctx_t* ctx, uint16_t addr, const buxn_asm_sym_t* sym) {
-}
-
-buxn_asm_file_t*
-buxn_asm_fopen(buxn_asm_ctx_t* ctx, const char* filename) {
-	// TODO: watch and reload on header change
-	return (void*)fopen(filename, "rb");
-}
-
-void
-buxn_asm_fclose(buxn_asm_ctx_t* ctx, buxn_asm_file_t* file) {
-	fclose((void*)file);
-}
-
-int
-buxn_asm_fgetc(buxn_asm_ctx_t* ctx, buxn_asm_file_t* file) {
-	int result = fgetc((void*)file);
-	if (result == EOF) {
-		return BUXN_ASM_IO_EOF;
-	} else if (result < 0) {
-		return BUXN_ASM_IO_ERROR;
-	} else {
-		return result;
 	}
 }
 
