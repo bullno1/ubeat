@@ -226,9 +226,11 @@ init(void) {
 	audio_thread_vm = malloc(sizeof(buxn_vm_t) + BUXN_MEMORY_BANK_SIZE);
 	init_vm(audio_thread_vm, &audio_thread_devices);
 
-	if (input_file != NULL) {
-		ubeat_asm_init(input_file);
-		try_reload_formula();
+	ubeat_asm_init();
+	ubeat_asm_set_entry_file(input_file);
+	try_reload_formula();
+	if (input_file == NULL) {
+		BLOG_WARN("No entry file set. Please drag and drop a .tal file into the window");
 	}
 
 	saudio_setup(&(saudio_desc){
@@ -261,9 +263,7 @@ cleanup(void) {
 
 	free(audio_thread_vm);
 	free(main_thread_vm);
-	if (input_file != NULL) {
-		ubeat_asm_cleanup();
-	}
+	ubeat_asm_cleanup();
 
 	sgl_shutdown();
 	sg_shutdown();
@@ -271,7 +271,7 @@ cleanup(void) {
 
 static void
 try_reload_formula(void) {
-	if (!(input_file != NULL && ubeat_asm_should_reload())) { return; }
+	if (!ubeat_asm_should_reload()) { return; }
 
 	BLOG_INFO("Compiling %s", input_file);
 
@@ -438,6 +438,13 @@ event(const sapp_event* event) {
 				buxn_controller_send_char(main_thread_vm, controller, ch);
 			}
 		} break;
+		case SAPP_EVENTTYPE_FILES_DROPPED:
+			if (sapp_get_num_dropped_files() > 0) {
+				input_file = sapp_get_dropped_file_path(0);
+				ubeat_asm_set_entry_file(input_file);
+				try_reload_formula();
+			}
+			break;
 		default: break;
 	}
 
@@ -902,7 +909,7 @@ parse_log_level(void* userdata, const char* value) {
 
 int
 main(int argc, const char* argv[]) {
-	blog_level_t log_level = BLOG_LEVEL_ERROR;
+	blog_level_t log_level = BLOG_LEVEL_INFO;
 	int width = 640;
 	int height = 480;
 	barg_opt_t opts[] = {
@@ -932,7 +939,7 @@ main(int argc, const char* argv[]) {
 		barg_opt_help(),
 	};
 	barg_t barg = {
-		.usage = "ubeat [options] <input.tal>",
+		.usage = "ubeat [options] [input.tal]",
 		.summary = "Start the live coding session",
 		.opts = opts,
 		.num_opts = sizeof(opts) / sizeof(opts[0]),
@@ -944,13 +951,10 @@ main(int argc, const char* argv[]) {
 		return result.status == BARG_PARSE_ERROR;
 	}
 	int num_args = argc - result.arg_index;
-	if (num_args != 1) {
-		result.status = BARG_SHOW_HELP;
-		barg_print_result(&barg, result, stderr);
-		return 1;
-	}
 
-	input_file = argv[result.arg_index];
+	if (num_args == 1) {
+		input_file = argv[result.arg_index];
+	}
 
 	blog_init(&(blog_options_t){
 		.current_depth_in_project = 0,
@@ -970,6 +974,8 @@ main(int argc, const char* argv[]) {
 		.height = height,
 		.window_title = "ubeat",
 		.icon.sokol_default = true,
+		.enable_dragndrop = true,
+		.max_dropped_files = 1,
 		.logger.func = slog,
 	});
 

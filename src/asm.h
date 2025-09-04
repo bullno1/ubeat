@@ -11,7 +11,10 @@ typedef struct {
 } rom_t;
 
 void
-ubeat_asm_init(const char* input_file);
+ubeat_asm_init(void);
+
+void
+ubeat_asm_set_entry_file(const char* filename);
 
 bool
 ubeat_asm_should_reload(void);

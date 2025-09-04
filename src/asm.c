@@ -21,7 +21,7 @@ static watch_table_t* current_watch_table = &watch_tables[0];
 static barena_t arenas[2];
 static barena_t* current_arena = &arenas[0];
 static int loaded_version = 0;
-static int current_version = 1;
+static int current_version = 0;
 
 static bhash_hash_t
 str_hash(const void* key, size_t size) {
@@ -50,13 +50,12 @@ ubeat_file_changed(const char* filename, void* userdata) {
 }
 
 void
-ubeat_asm_init(const char* input_file) {
+ubeat_asm_init(void) {
 	barena_pool_init(&arena_pool, 1);
 	barena_init(&arenas[0], &arena_pool);
 	barena_init(&arenas[1], &arena_pool);
 
 	monitor = bresmon_create(NULL);
-	entry_file = input_file;
 
 	bhash_config_t config = bhash_config_default();
 	config.eq = str_eq;
@@ -67,15 +66,23 @@ ubeat_asm_init(const char* input_file) {
 	bhash_init(&watch_tables[1], config);
 }
 
+void
+ubeat_asm_set_entry_file(const char* filename) {
+	++current_version;
+	entry_file = filename;
+}
+
 bool
 ubeat_asm_should_reload(void) {
 	bresmon_check(monitor, false);
 
-	return loaded_version != current_version;
+	return entry_file != NULL && loaded_version != current_version;
 }
 
 bool
 ubeat_asm_reload(rom_t* rom) {
+	if (entry_file == NULL) { return false; }
+
 	buxn_asm_ctx_t basm = {
 		.rom = rom,
 		.arena = current_arena,
