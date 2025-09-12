@@ -2,20 +2,20 @@
 
 ( 42 with adjustable decay )
 ( t*(42&t>>10)%256*(1-t%2048/3E3) )
-@on-beat ( -> )
-	[ .Bytebeat/t DEI2 ] forty-two
+@on-beat ( t* -> b )
+	DUP2 forty-two
 	#00ff AND2 ( %256 )
 
-	DUP2
+	DUP2 ROT2
 
-	[ .Bytebeat/t DEI2 ] #07ff AND2
+	#07ff AND2
 	#++3000
 	muldiv
 	( t%2048/3E3 )
 
 	SUB2
 
-	NIP .Bytebeat/b DEO
+	NIP
 	BRK
 
 @forty-two ( t* -- b* )

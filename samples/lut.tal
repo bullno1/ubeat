@@ -1,8 +1,7 @@
 ~samples/boilerplate.tal
 
 ( w='1234341'[( t>>13)%7]*t,w%50+w%40+w%30+w%60 )
-@on-beat ( -> )
-	[ .Bytebeat/t DEI2 ]
+@on-beat ( t* -> b )
 	#0d SFT2 ( t>>13* ! )
 	;lut/end ;lut SUB2 ( lut-len* ! )
 	MOD2 ;lut ADD2 LDA #00 SWP
@@ -14,8 +13,7 @@
 	OVR2 #++30 MOD2 ADD2
 	OVR2 #++60 MOD2 ADD2
 
-	NIP2
-	NIP .Bytebeat/b DEO
+	NIP2 NIP
 
 	BRK
 

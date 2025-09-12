@@ -15,8 +15,6 @@ bytebeat_dei(buxn_vm_t* vm, bytebeat_t* device, uint8_t address) {
 			return (uint8_t)(device->v >> 8);
 		case BYTEBEAT_V + 1:
 			return (uint8_t)(device->v & 0xff);
-		case BYTEBEAT_B:
-			return device->b;
 		default:
 			return vm->device[address];
 	}
@@ -36,9 +34,6 @@ bytebeat_deo(buxn_vm_t* vm, bytebeat_t* device, uint8_t address) {
 		case BYTEBEAT_V:
 			device->v = buxn_vm_dev_load2(vm, BYTEBEAT_V);
 			device->sync_bits |= BYTEBEAT_SYNC_V;
-			break;
-		case BYTEBEAT_B:
-			device->b = buxn_vm_dev_load(vm, BYTEBEAT_B);
 			break;
 	}
 }

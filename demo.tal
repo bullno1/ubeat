@@ -11,9 +11,6 @@
 	&t $2
 	(doc The play velocity, it can be set to pause or playing backward )
 	&v $2
-	(doc The bytebeat output.
-	Writing to this outside of a bytebeat vector will have no effect )
-	&b $1
 	(doc Device options
 	Bit 0: Whether time domain visualization is enabled.
 	Bit 1: Whether frequency domain (FFT) visualization is enabled.
@@ -28,7 +25,7 @@
 	#0f00 .System/b DEO2
 
 	;on-beat .Bytebeat/vector DEO2
-	#02 .Bytebeat/options DEO ( enable only fft )
+	#03 .Bytebeat/options DEO ( enable only fft )
 	;on-mouse .Mouse/vector DEO2
 	.memory-byte LDZ ?{ #+42 .memory-byte STZ }
 
@@ -79,10 +76,9 @@
 
 	BRK
 
-@on-beat ( -> )
-	.Bytebeat/t DEI2 memory
+@on-beat ( t* -> b )
+	memory
 	NIP
-	.Bytebeat/b DEO
 	BRK
 
 @forty-two ( t* -- b* )

@@ -1,11 +1,11 @@
 ~samples/boilerplate.tal
 
-@on-beat ( -> )
-	[ .Bytebeat/t DEI2 ] #1d30 ( frequency multiplier ) MUL2
+@on-beat ( t* -> b )
+	#1d30 ( frequency multiplier ) MUL2
 	#0080 ( amplitude )
 	SWP2 OVR2 sin
 	ADD2
-	NIP .Bytebeat/b DEO
+	NIP
 	BRK
 
 @sin ( angle* amp* -- sin* )

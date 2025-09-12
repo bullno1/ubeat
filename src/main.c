@@ -321,6 +321,7 @@ try_reload_formula(void) {
 	bytebeat_t* bytebeat = &main_thread_devices.bytebeat;
 	bytebeat->sync_bits = 0;
 	buxn_vm_execute(main_thread_vm, BUXN_RESET_VECTOR);
+	reset_jit(main_thread_vm);
 
 	audio_cmd_t* cmd = tribuf_begin_send(&audio_cmd_buf);
 	memcpy(cmd->rom.content, tmp_rom.content, tmp_rom.size);
@@ -336,8 +337,6 @@ try_reload_formula(void) {
 	if (main_thread_devices.bytebeat.vector == 0) {
 		BLOG_WARN("Bytebeat vector is not set");
 	}
-
-	reset_jit(main_thread_vm);
 }
 
 static float
@@ -644,18 +643,17 @@ frame(void) {
 			devices_t* devices = main_thread_vm->config.userdata;
 			buxn_jit_t* jit = devices->jit;
 			for (uint16_t i = 0; i < SAMPLING_RATE; ++i) {
-				bytebeat->t = t + i;
-				buxn_jit_execute(jit, bytebeat->vector);
+				uint8_t byte = bytebeat_render(main_thread_vm, jit, bytebeat, t + i);
 
 				if (bytebeat_opts & BYTEBEAT_OPTS_SHOW_WAVEFORM) {
 					sgl_v2f(
 						(float)i / (float)SAMPLING_RATE * width,
-						height - height * (float)bytebeat->b / 255.f
+						height - height * (float)byte / 255.f
 					);
 				}
 
 				if (i < (float)FFT_SIZE) {
-					fft_in[(int)i][0] = (float)bytebeat->b / 255.f * 2.f - 1.f;
+					fft_in[(int)i][0] = (float)byte / 255.f * 2.f - 1.f;
 					fft_in[(int)i][1] = 0.f;
 				}
 			}
@@ -770,8 +768,8 @@ audio(float* buffer, int num_frames, int num_channels) {
 	devices_t* devices = audio_thread_vm->config.userdata;
 	buxn_jit_t* jit = devices->jit;
 	for (int i = 0; i < num_frames; ++i, bytebeat->t += bytebeat->v) {
-		buxn_jit_execute(jit, bytebeat->vector);
-		buffer[i] = (float)bytebeat->b / 255.f * 2.f - 1.f;
+		uint8_t byte = bytebeat_render(audio_thread_vm, jit, bytebeat, bytebeat->t);
+		buffer[i] = (float)byte / 255.f * 2.f - 1.f;
 	}
 }
 

@@ -3,12 +3,12 @@
 
 #include <stdint.h>
 #include <buxn/vm/vm.h>
+#include <buxn/vm/jit.h>
 
 #define BYTEBEAT_VECTOR 0xd0
 #define BYTEBEAT_T 0xd2
 #define BYTEBEAT_V 0xd4
-#define BYTEBEAT_B 0xd6
-#define BYTEBEAT_OPTIONS 0xd7
+#define BYTEBEAT_OPTIONS 0xd6
 
 enum {
 	BYTEBEAT_SYNC_VECTOR = 1 << 0,
@@ -25,7 +25,6 @@ typedef struct {
 	uint16_t vector;
 	uint16_t t;
 	uint16_t v;
-	uint8_t b;
 
 	uint8_t sync_bits;
 } bytebeat_t;
@@ -44,6 +43,22 @@ bytebeat_init(bytebeat_t* device) {
 static inline uint8_t
 bytebeat_options(buxn_vm_t* vm) {
 	return buxn_vm_dev_load(vm, BYTEBEAT_OPTIONS);
+}
+
+static inline uint8_t
+bytebeat_render(
+	buxn_vm_t* vm,
+	buxn_jit_t* jit,
+	bytebeat_t* device,
+	uint16_t t
+) {
+	vm->wsp = 2;
+	vm->ws[0] = t >> 8;
+	vm->ws[1] = t & 0xff;
+	device->t = t;
+	buxn_jit_execute(jit, device->vector);
+	vm->wsp = 0;
+	return vm->ws[0];
 }
 
 #endif
