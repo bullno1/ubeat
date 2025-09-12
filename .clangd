@@ -9,5 +9,6 @@ CompileFlags:
     - -Ideps/sokol
     - -Ideps/sokol/util
     - -Ideps/buxn/include
+    - -Ideps/buxn-jit/include
     - -Ideps/blibs
     - -Ideps/am_fft

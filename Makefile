@@ -17,7 +17,9 @@ OBJS := \
 	.build/deps/buxn/src/metadata.c.o \
 	.build/deps/buxn/src/vm/vm.c.o \
 	.build/deps/buxn/src/asm/asm.c.o \
-	.build/deps/buxn/src/vm/vm.c.o
+	.build/deps/buxn/src/vm/vm.c.o \
+	.build/deps/buxn-jit/src/jit.c.o \
+	.build/deps/sljit/sljit_src/sljitLir.c.o
 
 all: ubeat
 
@@ -55,5 +57,7 @@ ubeat: $(OBJS)
 		-Ideps/sokol/util \
 		-Ideps/buxn/include \
 		-Ideps/am_fft \
+		-Ideps/buxn-jit/include \
+		-Ideps/sljit/sljit_src \
 		-o $@ \
 		$^

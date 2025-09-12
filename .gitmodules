@@ -10,3 +10,9 @@
 [submodule "deps/am_fft"]
 	path = deps/am_fft
 	url = https://github.com/ands/am_fft.git
+[submodule "deps/buxn-jit"]
+	path = deps/buxn-jit
+	url = https://github.com/bullno1/buxn-jit.git
+[submodule "deps/sljit"]
+	path = deps/sljit
+	url = https://github.com/zherczeg/sljit.git

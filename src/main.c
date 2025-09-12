@@ -11,7 +11,9 @@
 #include <am_fft.h>
 #include <blog.h>
 #include <barg.h>
+#include <barena.h>
 #include <buxn/vm/vm.h>
+#include <buxn/vm/jit.h>
 #include <buxn/devices/system.h>
 #include <buxn/devices/console.h>
 #include <buxn/devices/mouse.h>
@@ -54,6 +56,10 @@ typedef struct {
 	buxn_screen_t* screen;
 	bytebeat_t bytebeat;
 	buxn_fpu_t fpu;
+
+	buxn_jit_t* jit;
+	barena_pool_t arena_pool;
+	barena_t arena;
 } devices_t;
 
 enum {
@@ -165,6 +171,33 @@ init_vm(buxn_vm_t* vm, devices_t* devices) {
 
 	buxn_console_init(vm, &devices->console, 0, NULL);
 	bytebeat_init(&devices->bytebeat);
+
+	barena_pool_init(&devices->arena_pool, 1);
+	barena_init(&devices->arena, &devices->arena_pool);
+	devices->jit = buxn_jit_init(vm, (buxn_jit_alloc_ctx_t*)&devices->arena);
+}
+
+static void
+cleanup_vm(buxn_vm_t* vm) {
+	devices_t* devices = vm->config.userdata;
+
+	buxn_jit_cleanup(devices->jit);
+	barena_reset(&devices->arena);
+	barena_pool_cleanup(&devices->arena_pool);
+
+	free(vm);
+}
+
+static void
+reset_jit(buxn_vm_t* vm) {
+	devices_t* devices = vm->config.userdata;
+
+	buxn_jit_cleanup(devices->jit);
+	barena_reset(&devices->arena);
+	devices->jit = buxn_jit_init(
+		vm,
+		(buxn_jit_alloc_ctx_t*)&devices->arena
+	);
 }
 
 static void
@@ -261,8 +294,8 @@ cleanup(void) {
 
 	saudio_shutdown();
 
-	free(audio_thread_vm);
-	free(main_thread_vm);
+	cleanup_vm(audio_thread_vm);
+	cleanup_vm(main_thread_vm);
 	ubeat_asm_cleanup();
 
 	sgl_shutdown();
@@ -303,6 +336,8 @@ try_reload_formula(void) {
 	if (main_thread_devices.bytebeat.vector == 0) {
 		BLOG_WARN("Bytebeat vector is not set");
 	}
+
+	reset_jit(main_thread_vm);
 }
 
 static float
@@ -606,9 +641,11 @@ frame(void) {
 			double time_diff_s = stm_sec(stm_now()) - stm_sec(last_audio_state.timestamp);
 			uint16_t t = last_audio_state.t + (uint16_t)(time_diff_s * (double)SAMPLING_RATE) * (double)last_audio_state.v;
 			uint16_t old_t = bytebeat->t;
+			devices_t* devices = main_thread_vm->config.userdata;
+			buxn_jit_t* jit = devices->jit;
 			for (uint16_t i = 0; i < SAMPLING_RATE; ++i) {
 				bytebeat->t = t + i;
-				buxn_vm_execute(main_thread_vm, bytebeat->vector);
+				buxn_jit_execute(jit, bytebeat->vector);
 
 				if (bytebeat_opts & BYTEBEAT_OPTS_SHOW_WAVEFORM) {
 					sgl_v2f(
@@ -686,6 +723,9 @@ audio(float* buffer, int num_frames, int num_channels) {
 				cmd->rom.content,
 				cmd->rom.size
 			);
+
+			reset_jit(audio_thread_vm);
+
 			BLOG_DEBUG("Loaded new rom: %d bytes", cmd->rom.size);
 		}
 
@@ -727,8 +767,10 @@ audio(float* buffer, int num_frames, int num_channels) {
 	tribuf_end_send(&audio_state_buf);
 
 	// Render audio
+	devices_t* devices = audio_thread_vm->config.userdata;
+	buxn_jit_t* jit = devices->jit;
 	for (int i = 0; i < num_frames; ++i, bytebeat->t += bytebeat->v) {
-		buxn_vm_execute(audio_thread_vm, bytebeat->vector);
+		buxn_jit_execute(jit, bytebeat->vector);
 		buffer[i] = (float)bytebeat->b / 255.f * 2.f - 1.f;
 	}
 }
@@ -860,6 +902,11 @@ buxn_screen_request_resize(
 ) {
 	BLOG_WARN("Resizing is not supported");
 	return screen;
+}
+
+void*
+buxn_jit_alloc(buxn_jit_alloc_ctx_t* ctx, size_t size, size_t alignment) {
+	return barena_memalign((barena_t*)ctx, size, alignment);
 }
 
 // }}}
