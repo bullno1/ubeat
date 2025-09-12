@@ -2,18 +2,18 @@
 
 ( w='1234341'[( t>>13)%7]*t,w%50+w%40+w%30+w%60 )
 @on-beat ( t* -> b )
-	#0d SFT2 ( t>>13* ! )
+	STH2k #0d SFT2 ( t>>13* ! )
 	;lut/end ;lut SUB2 ( lut-len* ! )
 	MOD2 ;lut ADD2 LDA #00 SWP
 
-	[ .Bytebeat/t DEI2 ] MUL2 ( w* ! )
+	STH2r MUL2 ( w* ! )
 
-	DUP2 #++50 MOD2
-	OVR2 #++40 MOD2 ADD2
-	OVR2 #++30 MOD2 ADD2
-	OVR2 #++60 MOD2 ADD2
+	STH2k #++50 MOD2
+	STH2kr #++40 MOD2 ADD2
+	STH2kr #++30 MOD2 ADD2
+	STH2kr #++60 MOD2 ADD2
 
-	NIP2 NIP
+	POP2r NIP
 
 	BRK
 

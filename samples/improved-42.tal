@@ -3,10 +3,10 @@
 ( 42 with adjustable decay )
 ( t*(42&t>>10)%256*(1-t%2048/3E3) )
 @on-beat ( t* -> b )
-	DUP2 forty-two
+	STH2k forty-two
 	#00ff AND2 ( %256 )
 
-	DUP2 ROT2
+	DUP2 STH2r
 
 	#07ff AND2
 	#++3000
