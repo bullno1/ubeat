@@ -13,7 +13,7 @@
 #include <barg.h>
 #include <barena.h>
 #include <buxn/vm/vm.h>
-#include <buxn/vm/jit.h>
+#include <buxn/jit.h>
 #include <buxn/devices/system.h>
 #include <buxn/devices/console.h>
 #include <buxn/devices/mouse.h>
@@ -174,7 +174,9 @@ init_vm(buxn_vm_t* vm, devices_t* devices) {
 
 	barena_pool_init(&devices->arena_pool, 1);
 	barena_init(&devices->arena, &devices->arena_pool);
-	devices->jit = buxn_jit_init(vm, (buxn_jit_alloc_ctx_t*)&devices->arena);
+	devices->jit = buxn_jit_init(vm, &(buxn_jit_config_t){
+		.mem_ctx = &devices->arena,
+	});
 }
 
 static void
@@ -194,10 +196,9 @@ reset_jit(buxn_vm_t* vm) {
 
 	buxn_jit_cleanup(devices->jit);
 	barena_reset(&devices->arena);
-	devices->jit = buxn_jit_init(
-		vm,
-		(buxn_jit_alloc_ctx_t*)&devices->arena
-	);
+	devices->jit = buxn_jit_init(vm, &(buxn_jit_config_t){
+		.mem_ctx = &devices->arena,
+	});
 }
 
 static void
@@ -903,8 +904,8 @@ buxn_screen_request_resize(
 }
 
 void*
-buxn_jit_alloc(buxn_jit_alloc_ctx_t* ctx, size_t size, size_t alignment) {
-	return barena_memalign((barena_t*)ctx, size, alignment);
+buxn_jit_alloc(void* mem_ctx, size_t size, size_t alignment) {
+	return barena_memalign(mem_ctx, size, alignment);
 }
 
 // }}}

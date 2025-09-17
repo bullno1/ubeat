@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 #include <buxn/vm/vm.h>
-#include <buxn/vm/jit.h>
+#include <buxn/jit.h>
 
 #define BYTEBEAT_VECTOR 0xd0
 #define BYTEBEAT_T 0xd2
